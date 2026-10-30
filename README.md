@@ -25,15 +25,25 @@ and daemon is [docs/protocol.md](docs/protocol.md).
 
 ## Status
 
-Phase 0: project skeleton. Nothing works yet. The roadmap is in
-[docs/architecture.md](docs/architecture.md#roadmap).
+**Phase 1:** encrypted USB session, QR pairing, status, photos and desk mode.
+It works end to end between the `phonekey` CLI and the app in the iOS Simulator,
+but it has **not been tried on a real iPhone 7 yet**. No security key yet. The
+roadmap is in [docs/architecture.md](docs/architecture.md#roadmap).
+
+```bash
+cd linux && go build ./cmd/phonekey
+./phonekey pair            # scan the QR code with PhoneKey → Pair new computer
+./phonekey status
+./phonekey photo -o desk.jpg   # after "Allow photos" in the app
+```
 
 ## Layout
 
 ```
-ios/     iOS app (Swift, SwiftUI, iOS 15+)
-linux/   Linux daemon
-docs/    architecture and wire protocol
+ios/            iOS app (Swift, SwiftUI, iOS 15+)
+ios/PhoneKeyCore  protocol, Noise and session logic as a Swift package
+linux/          host CLI in Go (Linux, also runs on macOS)
+docs/           architecture, wire protocol, test vectors
 ```
 
 ## Security notes
@@ -53,7 +63,10 @@ Xcode 26 or later. Open `ios/PhoneKey.xcodeproj`, or from the command line:
 
 ```bash
 xcodebuild -project ios/PhoneKey.xcodeproj -scheme PhoneKey -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build
+(cd ios/PhoneKeyCore && swift test)
 ```
+
+The host CLI is described in [linux/README.md](linux/README.md).
 
 Current Xcode has no iOS 15 simulator, so iOS 15 behaviour can only be checked
 on a real device.
