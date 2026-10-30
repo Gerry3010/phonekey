@@ -17,10 +17,15 @@ Das Zielgerät ist ein **iPhone 7 mit höchstens iOS 15.8**, das Deployment Targ
 
 ## Arbeitsteilung
 
-- `ios/` ist die Apple-Seite (Claude auf dem Mac).
-- `linux/` ist der Linux-Daemon (Claude auf Linux).
-- `docs/protocol.md` ist der Vertrag zwischen beiden. Änderungen nur per PR, und die andere Seite
-  erfährt davon. Der Code folgt der Spec, nicht umgekehrt.
+- `ios/` ist die Apple-Seite.
+- `linux/` ist der Daemon in Go. Er zielt auf Linux, läuft aber auch auf macOS und wird dort über
+  den usbmuxd des Macs gegen das echte iPhone getestet. Claude auf dem Mac darf hier ausdrücklich
+  mitbauen, damit Claude auf Linux frei bleibt. Linux-only-Teile (`/dev/uhid` ab Phase 3) hinter
+  Build-Tags, getestet in einer Linux-VM.
+- `docs/protocol.md` ist der Vertrag zwischen beiden, `docs/protocol-vectors.json` die
+  Testvektoren dazu. Änderungen nur per PR. Der Code folgt der Spec, nicht umgekehrt.
+- Swift (CryptoKit) und Go (`flynn/noise`) implementieren Noise unabhängig voneinander. Das ist
+  gewollt: Interop-Tests zwischen beiden fangen Fehler, die eine einzelne Implementierung nicht sieht.
 
 ## Sicherheit
 
