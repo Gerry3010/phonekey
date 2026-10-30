@@ -68,7 +68,7 @@ The exact format is in [protocol.md](protocol.md).
 ## Roadmap
 
 0. **Project init.** Repo, Xcode project, docs. *(done)*
-1. **Transport and desk mode.** usbmuxd TCP channel, encrypted session, QR pairing, desk mode, photo tool as the first end-to-end feature. Protocol spec for the daemon.
+1. **Transport and desk mode.** usbmuxd TCP channel, encrypted session, QR pairing, desk mode, photo tool as the first end-to-end feature. Protocol spec for the daemon. *(done in the Simulator; device test open)*
 2. **Approval button.** Request, Touch ID, answer signed with a Secure Enclave key.
 3. **FIDO2 security key.** CTAP2 and U2F, ES256, Touch ID per signature; daemon side over `/dev/uhid`.
 4. **Streaming and voice.** Webcam and microphone streams, text-to-speech, push-to-talk.

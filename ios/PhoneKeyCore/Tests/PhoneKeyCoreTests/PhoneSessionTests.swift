@@ -170,6 +170,8 @@ final class PhoneSessionTests: XCTestCase {
     func testPairingThenRequests() async throws {
         let registry = TestRegistry()
         let (host, task, session) = start(registry)
+        var authenticated: Data?
+        session.onAuthenticated = { authenticated = $0 }
         let psk = Data(repeating: 9, count: 32)
         registry.invite = PairingInvite(hostKey: host.publicKey, psk: psk, hostName: "test")
 
@@ -177,6 +179,7 @@ final class PhoneSessionTests: XCTestCase {
         XCTAssertEqual(status, .ok)
         let phoneHello = try await host.receiveJSON()
         XCTAssertEqual(phoneHello["role"] as? String, "phone")
+        XCTAssertEqual(authenticated, host.publicKey)
         XCTAssertTrue(registry.paired.contains(host.publicKey))
         XCTAssertNil(registry.invite)
         XCTAssertEqual(session.mode, .pairing)

@@ -46,6 +46,8 @@ Das Zielgerät ist ein **iPhone 7 mit höchstens iOS 15.8**, das Deployment Targ
 ```
 ios/PhoneKey.xcodeproj   Xcode-16+-Format mit synchronisierten Ordnern
 ios/PhoneKey/            App-Code: neue Dateien landen automatisch im Target
+ios/PhoneKey-Info.plist  nur das URL-Schema phonekey://, Rest kommt aus INFOPLIST_KEY_*
+ios/PhoneKeyCore/        Swift-Package: Noise, Wire, PhoneSession (plattformneutral, testbar)
 ios/PhoneKeyTests/       XCTest-Unit-Tests, gehostet in der App
 docs/architecture.md     Desk-Station, Transport, Grenzen, Roadmap
 docs/protocol.md         Wire-Protokoll (Entwurf)
@@ -58,8 +60,18 @@ oder neue Targets anfassen.
 ## Build & Test
 
 ```bash
+(cd ios/PhoneKeyCore && swift test)      # Noise, Wire, Session – auf dem Mac, in Sekunden
+(cd linux && go vet ./... && go test ./...)
 xcodebuild -project ios/PhoneKey.xcodeproj -scheme PhoneKey -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build
 xcodebuild test -project ios/PhoneKey.xcodeproj -scheme PhoneKey -destination 'platform=iOS Simulator,name=iPhone SE (3rd generation)'
 ```
 
 Das iPhone SE (3. Gen.) hat dieselbe Bildschirmgröße wie das iPhone 7 (4,7″).
+
+**Interop-Test ohne iPhone:** Der Simulator teilt sich das Loopback-Interface mit dem Mac. App im
+Simulator starten, dann `phonekey pair -connect tcp:127.0.0.1:20555` und die ausgegebene URL mit
+`xcrun simctl openurl booted '<url>'` öffnen. `PHONEKEY_CONFIG_DIR` auf ein Testverzeichnis setzen,
+damit echte Host-Keys unberührt bleiben. Im Simulator liefert die Kamera ein Testbild.
+
+**Vektoren:** Nach jeder Protokolländerung `go run ./cmd/gen-vectors ../docs/protocol-vectors.json`
+in `linux/`. Go und Swift prüfen beide gegen diese Datei.

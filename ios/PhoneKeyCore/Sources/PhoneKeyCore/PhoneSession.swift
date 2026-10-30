@@ -37,6 +37,8 @@ public final class PhoneSession {
     public private(set) var mode: Wire.Mode?
     public private(set) var hostKey: Data?
     public private(set) var hostHello: HelloMessage?
+    /// Called with the host key once the host is authenticated.
+    public var onAuthenticated: ((Data) -> Void)?
 
     public init(stream: ByteStream, identity: Curve25519.KeyAgreement.PrivateKey, registry: HostRegistry) {
         self.stream = stream
@@ -79,6 +81,7 @@ public final class PhoneSession {
             throw SessionError.unknownHost
         }
         hostKey = remoteKey
+        onAuthenticated?(remoteKey)
         try await send(hello)
 
         while true {
