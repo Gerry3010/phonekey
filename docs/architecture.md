@@ -29,7 +29,7 @@ iPhone 7 (iOS 15, app)                       Linux (daemon)
  FIDO2 authenticator (Secure Enclave) ┐      ┌ /dev/uhid    → virtual security key
  camera                               │      ├ v4l2loopback → webcam
  microphone                           ├ USB ─┤ PipeWire     → microphone
- approvals (Touch ID, signed)         │usbmux├ MCP server   → tools for coding agents
+ approvals (Touch ID, signed)         │usbmux├ phonekey CLI → status, photos, approval hook
  desk mode                            ┘      └ (Wi-Fi fallback via Bonjour, later)
 ```
 
