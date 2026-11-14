@@ -281,7 +281,8 @@ A PSK is used for one pairing only. The host SHOULD give up after 5 minutes.
 The session key is not a FIDO key. FIDO credential keys are created in the
 Secure Enclave (Phase 2). Their list is a Keychain item (`…ThisDeviceOnly`)
 that the phone reads without Touch ID. From Phase 3a the per-credential
-`hmac-secret` secrets are Keychain items too and, like the keys, need Touch ID.
+`hmac-secret` secrets are stored with it, encrypted to the credential's Secure
+Enclave key; decrypting them needs Touch ID.
 
 ## 8. Security notes
 
@@ -383,7 +384,10 @@ over, just as its virtual USB key disappears and comes back (see Host side).
     this extension for resident and `verify-required` keys.
   - `hmac-secret: true` (3a): the phone creates a 32-byte random secret for the
     credential (CTAP's `CredRandomWithUV`) and answers `hmac-secret: true`.
-    `CredRandomWithoutUV` is never needed: no assertion is made without UV.
+    The secret is stored encrypted to the credential's own Secure Enclave key
+    (ECIES: `SecKeyCreateEncryptedData`, X9.63 SHA-256 with AES-GCM), so only
+    Touch ID can decrypt it. `CredRandomWithoutUV` is never needed: no
+    assertion is made without UV.
   - Other extensions are ignored.
 - Every credential is stored on the phone, discoverable or not.
 
@@ -416,7 +420,10 @@ over, just as its virtual USB key disappears and comes back (see Host side).
     [|| HMAC-SHA-256(secret, salt2)])` under the key `hmac-secret` in the
     authenticator data extensions.
   - A credential made without `hmac-secret` gives no output. The same Touch ID
-    unlocks the signature and the secret.
+    unlocks the signature and decrypts the secret.
+  - Unlike the signing keys, the secret leaves the Secure Enclave: the Secure
+    Enclave cannot compute HMAC. It exists in plain text only in the app's
+    memory while the output is computed.
 - The response contains `credential`, `authData`, `signature` (DER) and, for
   discoverable credentials, `user` (`id`, `name`, `displayName`).
 
@@ -528,8 +535,10 @@ encodings are accepted.
   parameter and answers `0x05 || public key (65) || key handle length ||
   key handle || certificate || signature`, signed over `0x00 || application ||
   challenge || key handle || public key`. The key handle is the credential ID.
-  The certificate is self-signed by a fresh P-256 key used for this one
-  registration and then discarded, so no attestation links two registrations.
+  The certificate is self-signed by a P-256 key that the phone creates in the
+  Secure Enclave for this one registration and deletes afterwards. This
+  attestation is **not a manufacturer statement**: there is no batch key and no
+  certificate in the repository, and nothing links two registrations.
 - `U2F_AUTHENTICATE` (`INS 0x02`): `challenge (32) || application (32) ||
   length || key handle`. Unknown key handle, or bound to another application:
   `0x6A80`. `P1 0x07` (check only): `0x6985` if the key handle is known.
