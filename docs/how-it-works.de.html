@@ -1,0 +1,653 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<style>:root{color-scheme:light;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}body{margin:0}img{max-width:100%}[hidden]{display:none!important}</style>
+<title>PhoneKey Funktionsweise</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
+<style>
+/* Layout: eine ruhige Lesespalte wie ein Datenblatt, Diagramme als eigene Tafeln, Abläufe als nummerierte Schritte. */
+:root {
+  --bg: #F2F4F7;
+  --surface: #FFFFFF;
+  --ink: #151B24;
+  --muted: #586273;
+  --line: #D4DAE3;
+  --accent: #2B55C7;
+  --accent-soft: #E4EAFA;
+  --touch: #B4511A;
+  --ok: #1D7A4B;
+  --warn: #965800;
+  --code-bg: #E8ECF2;
+  --f-display: "IBM Plex Sans Condensed", "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --f-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --f-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0E131A; --surface: #151C26; --ink: #E4E8EE; --muted: #98A3B4; --line: #2A3443;
+    --accent: #8AA9FF; --accent-soft: #1D2A48; --touch: #F2935C; --ok: #5CC690; --warn: #E6AB4E; --code-bg: #1B2331;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0E131A; --surface: #151C26; --ink: #E4E8EE; --muted: #98A3B4; --line: #2A3443;
+  --accent: #8AA9FF; --accent-soft: #1D2A48; --touch: #F2935C; --ok: #5CC690; --warn: #E6AB4E; --code-bg: #1B2331;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--f-body);
+  font-size: 1rem;
+  line-height: 1.6;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 0 3rem;
+  -webkit-text-size-adjust: 100%;
+}
+main { max-width: 46rem; margin: 0 auto; }
+a { color: var(--accent); text-underline-offset: 2px; }
+a:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+
+h1, h2, h3 { font-family: var(--f-display); line-height: 1.15; text-wrap: balance; margin: 0; }
+h1 { font-size: clamp(2.4rem, 9vw, 3.4rem); font-weight: 600; letter-spacing: -0.01em; }
+h2 { font-size: 1.65rem; font-weight: 600; }
+h3 { font-size: 1.2rem; font-weight: 600; }
+p { margin: 0; }
+code, kbd, .mono { font-family: var(--f-mono); font-size: 0.88em; }
+:not(pre) > code { background: var(--code-bg); padding: 0.08em 0.35em; border-radius: 4px; overflow-wrap: anywhere; }
+
+header.top { padding-block: 2.2rem 1.2rem; display: grid; gap: 0.9rem; }
+.eyebrow { font-family: var(--f-mono); font-size: 0.78rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+.lead { font-size: 1.1rem; max-width: 38rem; }
+
+.phases { display: flex; flex-wrap: wrap; gap: 0.5rem; padding: 0; margin: 0; list-style: none; }
+.pill { display: inline-flex; align-items: center; gap: 0.45rem; font-size: 0.82rem; padding: 0.3rem 0.65rem; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); }
+.dot { width: 0.55rem; height: 0.55rem; border-radius: 50%; background: var(--muted); flex: none; }
+.dot.ok { background: var(--ok); }
+.dot.warn { background: var(--warn); }
+
+nav.toc { border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); padding-block: 0.9rem; margin-bottom: 1rem; }
+nav.toc ul { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 0.35rem 1rem; font-size: 0.92rem; }
+nav.toc a { text-decoration: none; }
+nav.toc a:hover { text-decoration: underline; }
+
+section { padding-block: 1.6rem 0.4rem; display: grid; gap: 1rem; scroll-margin-top: 1rem; }
+section > * { min-width: 0; }
+.sub { display: grid; gap: 0.8rem; padding-top: 0.6rem; }
+
+figure.dia { margin: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 1rem 0.75rem 0.9rem; display: grid; gap: 0.7rem; }
+figure.dia .scroll { overflow-x: auto; }
+figure.dia svg { display: block; width: 100%; max-width: 440px; height: auto; margin: 0 auto; color: var(--ink); }
+figcaption { font-size: 0.88rem; color: var(--muted); max-width: 36rem; margin: 0 auto; }
+
+/* SVG-Bausteine, alle Farben aus den Tokens */
+.dia .box { fill: var(--surface); stroke: var(--line); stroke-width: 1.2; }
+.dia .box-acc { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.4; }
+.dia .box-touch { fill: var(--surface); stroke: var(--touch); stroke-width: 1.4; }
+.dia .zone { fill: none; stroke: var(--muted); stroke-width: 1; stroke-dasharray: 4 4; }
+.dia .ln { stroke: currentColor; stroke-width: 1.3; fill: none; }
+.dia .ln-dash { stroke: var(--muted); stroke-width: 1.2; fill: none; stroke-dasharray: 3 4; }
+.dia .ln-cable { stroke: var(--ink); stroke-width: 5; fill: none; stroke-linecap: round; }
+.dia .ln-life { stroke: var(--line); stroke-width: 1.2; fill: none; stroke-dasharray: 4 4; }
+.dia .ln-warn { stroke: var(--warn); stroke-width: 1.3; fill: none; }
+.dia .ln-ok { stroke: var(--ok); stroke-width: 1.4; fill: none; }
+.dia text { font-family: var(--f-body); font-size: 12px; fill: var(--ink); }
+.dia .t-b { font-weight: 600; }
+.dia .t-m { fill: var(--muted); font-size: 11px; }
+.dia .t-mono { font-family: var(--f-mono); font-size: 11px; }
+.dia .t-zone { font-family: var(--f-mono); font-size: 10.5px; fill: var(--muted); letter-spacing: 0.05em; text-transform: uppercase; }
+.dia .t-touch { fill: var(--touch); font-weight: 600; }
+.dia .t-warn { fill: var(--warn); font-weight: 600; }
+.dia .t-ok { fill: var(--ok); font-weight: 600; }
+.dia .mk { fill: currentColor; }
+.dia .mk-muted { fill: var(--muted); }
+.dia .mk-warn { fill: var(--warn); }
+.dia .mk-ok { fill: var(--ok); }
+
+/* Präambel als Bytes */
+.bytes { display: flex; flex-wrap: wrap; gap: 0.4rem; margin: 0; padding: 0; list-style: none; }
+.bytes li { display: grid; gap: 0.15rem; justify-items: center; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 0.4rem 0.6rem; min-width: 0; }
+.bytes .hex { font-family: var(--f-mono); font-size: 0.95rem; font-weight: 500; }
+.bytes .lbl { font-size: 0.74rem; color: var(--muted); }
+
+/* Schritte */
+ol.steps { list-style: none; counter-reset: s; margin: 0; padding: 0; display: grid; gap: 0.75rem; }
+ol.steps > li { counter-increment: s; display: grid; grid-template-columns: 1.9rem 1fr; gap: 0.6rem; align-items: start; }
+ol.steps > li::before { content: counter(s); font-family: var(--f-mono); font-size: 0.82rem; font-weight: 500; width: 1.6rem; height: 1.6rem; border-radius: 50%; display: grid; place-items: center; border: 1.5px solid var(--accent); color: var(--accent); margin-top: 0.1rem; }
+ol.steps > li > div { min-width: 0; }
+
+ul.plain { margin: 0; padding-left: 1.2rem; display: grid; gap: 0.45rem; }
+ul.plain li::marker { color: var(--muted); }
+
+pre { margin: 0; background: var(--code-bg); border-radius: 10px; padding: 0.85rem 1rem; overflow-x: auto; font-family: var(--f-mono); font-size: 0.82rem; line-height: 1.55; }
+pre .c { color: var(--muted); }
+
+.tbl { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
+th, td { text-align: left; vertical-align: top; padding: 0.55rem 0.75rem; border-bottom: 1px solid var(--line); }
+tr:last-child td { border-bottom: 0; }
+th { font-weight: 600; font-size: 0.8rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+td:first-child { white-space: nowrap; }
+
+.note { border-left: 3px solid var(--touch); padding: 0.2rem 0 0.2rem 0.9rem; }
+.note.ok { border-left-color: var(--ok); }
+.note.warn { border-left-color: var(--warn); }
+
+.facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr)); gap: 0.5rem; margin: 0; }
+.facts div { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 0.6rem 0.75rem; display: grid; gap: 0.1rem; }
+.facts dt { font-size: 0.76rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.facts dd { margin: 0; font-family: var(--f-mono); font-size: 0.9rem; overflow-wrap: anywhere; }
+
+.road { list-style: none; margin: 0; padding: 0; display: grid; gap: 0; }
+.road > li { display: grid; grid-template-columns: 1.4rem 1fr; gap: 0.7rem; position: relative; padding-bottom: 1.1rem; }
+.road > li::before { content: ""; position: absolute; left: 0.62rem; top: 1.3rem; bottom: 0; width: 2px; background: var(--line); }
+.road > li:last-child::before { display: none; }
+.road .mark { width: 1.3rem; height: 1.3rem; border-radius: 50%; border: 2px solid var(--muted); background: var(--bg); margin-top: 0.15rem; }
+.road .mark.ok { border-color: var(--ok); background: var(--ok); }
+.road .mark.warn { border-color: var(--warn); background: var(--bg); }
+.road .body { display: grid; gap: 0.35rem; min-width: 0; }
+.road .state { font-size: 0.8rem; font-family: var(--f-mono); color: var(--muted); }
+
+dl.gloss { margin: 0; display: grid; gap: 0.6rem; }
+dl.gloss dt { font-weight: 600; }
+dl.gloss dd { margin: 0; color: var(--muted); }
+
+footer { margin-top: 2rem; padding-top: 1rem; border-top: 1px solid var(--line); font-size: 0.85rem; color: var(--muted); display: grid; gap: 0.4rem; }
+
+@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+@media (min-width: 640px) { html { scroll-behavior: smooth; } }
+</style>
+</head>
+<body>
+
+<main>
+<header class="top">
+  <p class="eyebrow">Stand 14. November 2026</p>
+  <h1>PhoneKey</h1>
+  <p class="lead">Ein altes iPhone 7 steht am Schreibtisch, hängt per USB am Linux-Rechner und dient dort als Sicherheitsschlüssel für Websites und ssh. Jede Registrierung und jede Anmeldung bestätigst du am iPhone mit Touch ID. Kamera und Mikrofon kommen später dazu.</p>
+  <ul class="phases" aria-label="Stand der Phasen">
+    <li class="pill"><span class="dot ok"></span>Verbindung und Pairing</li>
+    <li class="pill"><span class="dot ok"></span>Sicherheitsschlüssel, ssh</li>
+    <li class="pill"><span class="dot warn"></span>Browser-Test nach Fix</li>
+    <li class="pill"><span class="dot"></span>LUKS, PIN, Schlüsselliste</li>
+    <li class="pill"><span class="dot"></span>Kamera und Mikrofon</li>
+  </ul>
+</header>
+
+<nav class="toc" aria-label="Inhalt">
+  <ul>
+    <li><a href="#ueberblick">Überblick</a></li>
+    <li><a href="#bausteine">Bausteine</a></li>
+    <li><a href="#verbindung">Verbindung</a></li>
+    <li><a href="#pairing">Pairing</a></li>
+    <li><a href="#fotos">Status und Fotos</a></li>
+    <li><a href="#desk">Desk-Modus</a></li>
+    <li><a href="#fido">Sicherheitsschlüssel</a></li>
+    <li><a href="#registrieren">Registrieren</a></li>
+    <li><a href="#anmelden">Anmelden</a></li>
+    <li><a href="#chrome">Chrome-Fehler</a></li>
+    <li><a href="#einrichtung">Einrichtung</a></li>
+    <li><a href="#schluessel">Wo die Schlüssel liegen</a></li>
+    <li><a href="#grenzen">Grenzen</a></li>
+    <li><a href="#roadmap">Roadmap</a></li>
+    <li><a href="#begriffe">Begriffe</a></li>
+  </ul>
+</nav>
+
+<section id="ueberblick">
+  <h2>Überblick</h2>
+  <figure class="dia">
+    <div class="scroll">
+    <svg viewBox="0 0 360 640" role="img" aria-label="Aufbau: Browser und ssh sprechen mit einem virtuellen USB-Schlüssel unter Linux. phonekey reicht die Anfragen verschlüsselt über usbmuxd und das USB-Kabel an die App auf dem iPhone weiter, wo Secure Enclave und Touch ID sitzen.">
+      <defs>
+        <marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="mk" d="M0,0 L10,5 L0,10 z"/></marker>
+      </defs>
+      <rect class="zone" x="6" y="6" width="348" height="296" rx="12"/>
+      <text class="t-zone" x="20" y="27">Linux-Rechner</text>
+
+      <rect class="box" x="40" y="40" width="280" height="38" rx="8"/>
+      <text x="180" y="64" text-anchor="middle">Browser · ssh · libfido2</text>
+      <line class="ln" x1="180" y1="78" x2="180" y2="110" marker-end="url(#a1)"/>
+      <text class="t-m" x="190" y="99">CTAPHID, 64-Byte-Pakete</text>
+
+      <rect class="box" x="40" y="112" width="280" height="38" rx="8"/>
+      <text x="180" y="136" text-anchor="middle">/dev/hidraw · virtueller USB-Key</text>
+      <line class="ln" x1="180" y1="150" x2="180" y2="182" marker-start="url(#a1)" marker-end="url(#a1)"/>
+      <text class="t-m" x="190" y="171">/dev/uhid</text>
+
+      <rect class="box-acc" x="40" y="184" width="280" height="38" rx="8"/>
+      <text class="t-b" x="180" y="208" text-anchor="middle">phonekey fido run</text>
+      <line class="ln" x1="180" y1="222" x2="180" y2="254" marker-end="url(#a1)"/>
+      <text class="t-m" x="190" y="243">verschlüsselte Sitzung</text>
+
+      <rect class="box" x="40" y="256" width="280" height="34" rx="8"/>
+      <text x="180" y="278" text-anchor="middle">usbmuxd</text>
+
+      <line class="ln-cable" x1="180" y1="290" x2="180" y2="384"/>
+      <text class="t-b" x="194" y="328">USB-Kabel</text>
+      <text class="t-m" x="194" y="344">TCP-Tunnel auf Port 20555</text>
+
+      <rect class="zone" x="6" y="352" width="348" height="282" rx="12"/>
+      <text class="t-zone" x="20" y="373">iPhone 7 · App PhoneKey</text>
+
+      <rect class="box-acc" x="40" y="386" width="280" height="38" rx="8"/>
+      <text class="t-b" x="180" y="410" text-anchor="middle">PhoneServer · 127.0.0.1:20555</text>
+      <line class="ln" x1="150" y1="424" x2="74" y2="462" marker-end="url(#a1)"/>
+      <line class="ln" x1="180" y1="424" x2="180" y2="462" marker-end="url(#a1)"/>
+      <line class="ln" x1="210" y1="424" x2="286" y2="462" marker-end="url(#a1)"/>
+
+      <rect class="box" x="14" y="464" width="112" height="36" rx="8"/>
+      <text x="70" y="487" text-anchor="middle">Authenticator</text>
+      <rect class="box" x="134" y="464" width="92" height="36" rx="8"/>
+      <text x="180" y="487" text-anchor="middle">Kamera</text>
+      <rect class="box" x="234" y="464" width="112" height="36" rx="8"/>
+      <text x="290" y="487" text-anchor="middle">Status, Desk</text>
+
+      <line class="ln" x1="70" y1="500" x2="70" y2="538" marker-end="url(#a1)"/>
+      <rect class="box-touch" x="14" y="540" width="190" height="40" rx="8"/>
+      <text class="t-touch" x="109" y="565" text-anchor="middle">Secure Enclave · Touch ID</text>
+
+      <text class="t-m" x="275" y="526" text-anchor="middle">Fotos jetzt,</text>
+      <text class="t-m" x="275" y="541" text-anchor="middle">Webcam später</text>
+      <text class="t-m" x="275" y="565" text-anchor="middle">Akku, Temperatur</text>
+
+      <text class="t-m" x="180" y="612" text-anchor="middle">läuft nur im Vordergrund, darum geführter Zugriff</text>
+    </svg>
+    </div>
+    <figcaption>Die Anfrage einer Website wandert von oben nach unten bis zum Secure Enclave, die Antwort denselben Weg zurück. Linux sieht dabei nie einen privaten Schlüssel.</figcaption>
+  </figure>
+  <p>Auf dem iPhone läuft die App PhoneKey. Sie wartet auf einem lokalen Port auf Verbindungen vom Rechner. Auf Linux läuft das Programm <code>phonekey</code>. Es erreicht die App über usbmuxd, denselben Dienst, über den auch Xcode und iTunes mit einem iPhone sprechen. Ins Netzwerk geht dabei nichts.</p>
+  <p>Für Browser und ssh sieht das Ganze aus wie ein gewöhnlicher USB-Sicherheitsschlüssel. Den gibt es allerdings nur, solange das iPhone angesteckt und die App offen ist. Ziehst du das Kabel oder geht die App in den Hintergrund, verschwindet der Schlüssel wie ein abgezogener YubiKey und taucht wieder auf, sobald die Verbindung zurück ist.</p>
+</section>
+
+<section id="bausteine">
+  <h2>Bausteine</h2>
+  <div class="tbl">
+    <table>
+      <thead><tr><th>Teil</th><th>Läuft auf</th><th>Aufgabe</th></tr></thead>
+      <tbody>
+        <tr><td>App PhoneKey</td><td>iPhone 7, iOS 15</td><td>Nimmt Verbindungen an, zeigt jede Anfrage an, fragt Touch ID ab, verwaltet die Schlüssel im Secure Enclave, macht Fotos und hält im Desk-Modus den Bildschirm an.</td></tr>
+        <tr><td><code>phonekey</code></td><td>Linux, für Tests auch macOS</td><td>Kommandozeile für Pairing, Status, Fotos und Diagnose. Als Dienst <code>phonekey fido run</code> stellt es den virtuellen USB-Schlüssel bereit.</td></tr>
+        <tr><td>Protokoll</td><td><code>docs/protocol.md</code></td><td>Der Vertrag zwischen beiden Seiten. Dazu gehören Testvektoren, gegen die Swift und Go gleichermaßen prüfen.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>Die Verschlüsselung ist zweimal unabhängig gebaut: auf dem iPhone mit CryptoKit, unter Linux mit der Go-Bibliothek <code>flynn/noise</code>. Weicht eine Seite vom Standard ab, scheitert der gemeinsame Test. Ein einzelnes Programm, das mit sich selbst redet, würde so einen Fehler nicht bemerken.</p>
+</section>
+
+<section id="verbindung">
+  <h2>Verbindung und Verschlüsselung</h2>
+  <p>Die App lauscht nur auf <code>127.0.0.1:20555</code>. Die Zahl ist kein Zufall: 20555 ist hexadezimal <code>0x504B</code>, also die Buchstaben „PK“. Von außen kommt man an diesen Port nur über usbmuxd und das USB-Kabel.</p>
+  <p>Jedes Programm auf dem Rechner, das mit usbmuxd sprechen darf, könnte eine Verbindung öffnen. Darum ist jede Sitzung verschlüsselt, und beide Seiten prüfen, mit wem sie reden: Das iPhone nimmt nur gepairte Rechner an, der Rechner nur gepairte iPhones.</p>
+
+  <div class="sub">
+    <h3>Die ersten acht Bytes</h3>
+    <p>Bevor verschlüsselt wird, schicken sich beide eine kurze Präambel im Klartext. So sieht die des Rechners aus:</p>
+    <ul class="bytes" aria-label="Präambel des Rechners">
+      <li><span class="hex">50 48 4B 59</span><span class="lbl">„PHKY“</span></li>
+      <li><span class="hex">01</span><span class="lbl">Version</span></li>
+      <li><span class="hex">00</span><span class="lbl">Modus: Sitzung</span></li>
+      <li><span class="hex">00 00</span><span class="lbl">reserviert</span></li>
+    </ul>
+    <p>Beim Pairing steht im Modus-Byte <code>01</code>. Das iPhone antwortet mit derselben Form und einem Status: <code>00</code> ok, <code>01</code> Version passt nicht, <code>02</code> kein Pairing offen, <code>03</code> besetzt (schon vier Verbindungen). Beide Präambeln fließen in den Handshake ein, damit niemand sie unterwegs verändern kann.</p>
+  </div>
+
+  <figure class="dia">
+    <div class="scroll">
+    <svg viewBox="0 0 360 470" role="img" aria-label="Ablauf einer Sitzung: Verbindung über usbmuxd, Präambeln, drei Noise-Nachrichten, gegenseitige Schlüsselprüfung, hello, danach verschlüsselte Anfragen und Antworten.">
+      <defs>
+        <marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="mk" d="M0,0 L10,5 L0,10 z"/></marker>
+      </defs>
+      <rect class="box-acc" x="14" y="8" width="112" height="34" rx="8"/>
+      <text class="t-b" x="70" y="30" text-anchor="middle">phonekey</text>
+      <rect class="box-acc" x="234" y="8" width="112" height="34" rx="8"/>
+      <text class="t-b" x="290" y="30" text-anchor="middle">App (iPhone)</text>
+      <line class="ln-life" x1="70" y1="42" x2="70" y2="460"/>
+      <line class="ln-life" x1="290" y1="42" x2="290" y2="460"/>
+
+      <text x="180" y="66" text-anchor="middle">usbmuxd: Connect, Port 20555</text>
+      <line class="ln" x1="70" y1="74" x2="288" y2="74" marker-end="url(#a2)"/>
+
+      <text class="t-mono" x="180" y="104" text-anchor="middle">PHKY 01 00 · Präambel</text>
+      <line class="ln" x1="70" y1="112" x2="288" y2="112" marker-end="url(#a2)"/>
+      <text class="t-mono" x="180" y="140" text-anchor="middle">PHKY 01 00 · Status ok</text>
+      <line class="ln" x1="290" y1="148" x2="72" y2="148" marker-end="url(#a2)"/>
+
+      <text x="180" y="180" text-anchor="middle">Noise 1: e</text>
+      <line class="ln" x1="70" y1="188" x2="288" y2="188" marker-end="url(#a2)"/>
+      <text x="180" y="216" text-anchor="middle">Noise 2: e, ee, s, es</text>
+      <line class="ln" x1="290" y1="224" x2="72" y2="224" marker-end="url(#a2)"/>
+      <text x="180" y="252" text-anchor="middle">Noise 3: s, se</text>
+      <line class="ln" x1="70" y1="260" x2="288" y2="260" marker-end="url(#a2)"/>
+
+      <rect class="box-touch" x="40" y="276" width="280" height="36" rx="8"/>
+      <text x="180" y="299" text-anchor="middle">beide prüfen den Schlüssel der Gegenseite</text>
+
+      <text x="180" y="340" text-anchor="middle">hello (Version, Gerät, Funktionen)</text>
+      <line class="ln" x1="72" y1="348" x2="288" y2="348" marker-start="url(#a2)" marker-end="url(#a2)"/>
+
+      <text x="180" y="384" text-anchor="middle">status.get · photo.capture · ctap.request</text>
+      <line class="ln" x1="70" y1="392" x2="288" y2="392" marker-end="url(#a2)"/>
+      <text x="180" y="424" text-anchor="middle">Antworten, Bilddaten in Blöcken</text>
+      <line class="ln" x1="290" y1="432" x2="72" y2="432" marker-end="url(#a2)"/>
+    </svg>
+    </div>
+    <figcaption>Ab der dritten Noise-Nachricht ist alles verschlüsselt (X25519, ChaCha20-Poly1305, SHA-256). Kennt eine Seite den Schlüssel der anderen nicht, bricht sie hier ab.</figcaption>
+  </figure>
+
+  <ul class="plain">
+    <li>Jede Nachricht ist ein Rahmen aus 2 Byte Länge und dem verschlüsselten Inhalt. Darin steckt entweder ein JSON-Objekt (Anfragen und Antworten) oder ein Datenblock mit bis zu 60&nbsp;000 Byte (zum Beispiel ein Stück eines Fotos).</li>
+    <li>Das iPhone nimmt höchstens vier Verbindungen gleichzeitig an. Ein Handshake, der nach 10 Sekunden nicht fertig ist, wird abgebrochen.</li>
+    <li>Geht die App in den Hintergrund, schließt sie alle Verbindungen. <code>phonekey</code> versucht es dann nach 1, 2, 4 und 8 Sekunden erneut und danach alle 10 Sekunden.</li>
+  </ul>
+</section>
+
+<section id="pairing">
+  <h2>Pairing</h2>
+  <p>Vorher muss das iPhone dem Rechner einmal per USB vertrauen (Dialog „Vertrauen“ beim Anstecken oder <code>idevicepair pair</code>). Das ist Apples eigene Kopplung für usbmuxd. Das Pairing von PhoneKey kommt danach und ist davon unabhängig.</p>
+  <ol class="steps">
+    <li><div>Du startest <code>phonekey pair</code>. Beim ersten Mal erzeugt es den Schlüssel des Rechners (X25519) und speichert ihn in <code>~/.config/phonekey/host.key</code>, lesbar nur für dich.</div></li>
+    <li><div>Es erzeugt ein 32-Byte-Geheimnis, das nur für dieses eine Pairing gilt, und zeigt einen QR-Code mit der Adresse <code>phonekey://pair?v=1&amp;k=…&amp;s=…&amp;n=…</code>. Darin stehen der öffentliche Schlüssel des Rechners, das Geheimnis und der Rechnername.</div></li>
+    <li><div>In der App tippst du auf „Pair new computer“ und scannst den Code. Die App zeigt den Rechnernamen, du bestätigst. Danach wartet das iPhone 5 Minuten lang auf genau diesen Rechner.</div></li>
+    <li><div><code>phonekey</code> verbindet sich im Pairing-Modus. Meldet das iPhone noch „kein Pairing offen“, versucht es jede Sekunde erneut.</div></li>
+    <li><div>Der Handshake (Noise XXpsk3) gelingt nur, wenn beide Seiten dasselbe Geheimnis kennen. Dann speichert das iPhone Schlüssel und Namen des Rechners im Schlüsselbund, und der Rechner trägt den Schlüssel des iPhones in <code>phones.json</code> ein.</div></li>
+    <li><div>Ab jetzt reicht der normale Handshake ohne Geheimnis. Gepairte Rechner siehst und löschst du in der App unter „Paired computers“, auf Linux mit <code>phonekey phones</code> und <code>phonekey unpair</code>.</div></li>
+  </ol>
+  <p class="note">Wer einen Rechner pairen will, braucht den Code vom Bildschirm dieses Rechners und deine Bestätigung am iPhone. Ein Programm, das nur heimlich mit usbmuxd spricht, hat keins von beiden.</p>
+</section>
+
+<section id="fotos">
+  <h2>Status, Ping und Fotos</h2>
+  <ul class="plain">
+    <li><code>phonekey status</code> zeigt Akkustand und Ladezustand, den Temperaturzustand des iPhones, ob Desk-Modus und geführter Zugriff an sind und ob Fotos erlaubt sind.</li>
+    <li><code>phonekey ping</code> misst die Antwortzeit einer Runde.</li>
+    <li><code>phonekey devices</code> listet die iPhones, die usbmuxd sieht, <code>phonekey phones</code> die gepairten.</li>
+  </ul>
+  <div class="sub">
+    <h3>Ein Foto aufnehmen</h3>
+    <ol class="steps">
+      <li><div>Du rufst <code>phonekey photo -o bild.jpg</code> auf. Optional mit Frontkamera, eigener Größe (Standard: längste Seite 1568 Pixel) und JPEG-Qualität (Standard 0,8).</div></li>
+      <li><div>Die App prüft, ob „Allow photos“ eingeschaltet ist. Ab Werk ist es aus, dann kommt die Antwort <code>camera_disabled</code>.</div></li>
+      <li><div>Das iPhone nimmt das Foto auf, zeigt „Taking a photo“ am Bildschirm, und iOS spielt den Auslöser-Ton. Heimlich fotografieren geht also nicht.</div></li>
+      <li><div>Das Bild kommt in Blöcken, eingerahmt von <code>photo.begin</code> (Größe, Abmessungen) und <code>photo.end</code> (SHA-256). <code>phonekey</code> prüft Größe und Prüfsumme, bevor es die Datei schreibt.</div></li>
+    </ol>
+  </div>
+</section>
+
+<section id="desk">
+  <h2>Desk-Modus</h2>
+  <p>iOS hält Apps im Hintergrund an. Die Kamera stoppt, Verbindungen brechen ab, und Touch ID fragt nicht mehr. PhoneKey ist deshalb als feste Station am Schreibtisch gedacht:</p>
+  <ul class="plain">
+    <li>Das iPhone hängt dauerhaft am Kabel, das liefert Strom und Daten.</li>
+    <li>Der geführte Zugriff (Dreifachklick auf die Home-Taste) hält die App im Vordergrund.</li>
+    <li>„Start desk mode“ lässt den Bildschirm an und dreht die Helligkeit auf das Minimum. Zu sehen sind Akkustand und der letzte Kontakt („Last contact: Rechner, vor 2 min“). Kommt eine Anfrage, wird der Bildschirm heller, bis du sie beantwortet hast.</li>
+    <li>Das Hochformat geht in beide Richtungen, das Kabel darf also oben sein.</li>
+  </ul>
+  <p class="note warn">Ein alter Akku, der ständig am Ladegerät hängt, kann sich aufblähen. Schau ab und zu nach.</p>
+</section>
+
+<section id="fido">
+  <h2>Sicherheitsschlüssel (FIDO2)</h2>
+  <p>Das iPhone ist der eigentliche Authenticator nach CTAP2, dem Standard hinter Passkeys und USB-Sicherheitsschlüsseln. Der Linux-Rechner reicht die Nachrichten nur durch. Er sieht weder einen privaten Schlüssel noch deinen Fingerabdruck.</p>
+  <p><code>phonekey fido run</code> läuft als systemd-Dienst deines Benutzers. Sobald die Sitzung zum iPhone steht, legt es über <code>/dev/uhid</code> ein HID-Gerät an (Hersteller <code>0x1209</code>, Produkt <code>0x0001</code>, Usage Page <code>0xF1D0</code> für FIDO). Linux macht daraus ein <code>/dev/hidrawN</code>, systemd gibt es dem angemeldeten Benutzer frei, und Browser, ssh und libfido2 finden es wie jeden anderen Schlüssel.</p>
+  <dl class="facts">
+    <div><dt>Standard</dt><dd>CTAP 2.0</dd></div>
+    <div><dt>Algorithmus</dt><dd>ES256 (P-256)</dd></div>
+    <div><dt>Verifikation</dt><dd>Touch ID, jeder Finger</dd></div>
+    <div><dt>Passkeys</dt><dd>ja (rk)</dd></div>
+    <div><dt>Erweiterung</dt><dd>credProtect</dd></div>
+    <div><dt>Attestierung</dt><dd>none</dd></div>
+    <div><dt>AAGUID</dt><dd>4e3b1fe3-c75c-4055-b791-c999ff915951</dd></div>
+    <div><dt>Nachricht max.</dt><dd>1200 Byte</dd></div>
+    <div><dt>IDs pro Anfrage</dt><dd>16 zu je 32 Byte</dd></div>
+  </dl>
+  <p>Das iPhone bearbeitet immer nur eine FIDO-Anfrage gleichzeitig. Eine zweite bekommt <code>CHANNEL_BUSY</code>. Während es auf dich wartet, beantwortet es trotzdem Ping, Status und Abbrüche.</p>
+
+  <div class="sub" id="registrieren">
+    <h3>Registrieren</h3>
+    <figure class="dia">
+      <div class="scroll">
+      <svg viewBox="0 0 360 380" role="img" aria-label="Registrierung: Der Browser schickt makeCredential an phonekey, phonekey schickt ctap.request ans iPhone und meldet dem Browser alle 100 Millisekunden KEEPALIVE. Das iPhone zeigt Website und Konto, nach Tippen und Touch ID erzeugt der Secure Enclave einen Schlüssel. Die Antwort geht zurück an den Browser.">
+        <defs>
+          <marker id="a3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="mk" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="a3m" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="mk-muted" d="M0,0 L10,5 L0,10 z"/></marker>
+        </defs>
+        <rect class="box" x="6" y="8" width="92" height="34" rx="8"/>
+        <text class="t-b" x="52" y="30" text-anchor="middle">Browser</text>
+        <rect class="box-acc" x="134" y="8" width="92" height="34" rx="8"/>
+        <text class="t-b" x="180" y="30" text-anchor="middle">phonekey</text>
+        <rect class="box" x="262" y="8" width="92" height="34" rx="8"/>
+        <text class="t-b" x="308" y="30" text-anchor="middle">iPhone</text>
+        <line class="ln-life" x1="52" y1="42" x2="52" y2="372"/>
+        <line class="ln-life" x1="180" y1="42" x2="180" y2="372"/>
+        <line class="ln-life" x1="308" y1="42" x2="308" y2="372"/>
+
+        <text x="116" y="66" text-anchor="middle">makeCredential</text>
+        <line class="ln" x1="52" y1="74" x2="178" y2="74" marker-end="url(#a3)"/>
+        <text x="244" y="98" text-anchor="middle">ctap.request</text>
+        <line class="ln" x1="180" y1="106" x2="306" y2="106" marker-end="url(#a3)"/>
+
+        <line class="ln-dash" x1="180" y1="138" x2="54" y2="138" marker-end="url(#a3m)"/>
+        <line class="ln-dash" x1="180" y1="160" x2="54" y2="160" marker-end="url(#a3m)"/>
+        <line class="ln-dash" x1="180" y1="182" x2="54" y2="182" marker-end="url(#a3m)"/>
+        <text class="t-m" x="116" y="204" text-anchor="middle">KEEPALIVE</text>
+        <text class="t-m" x="116" y="218" text-anchor="middle">alle 100 ms</text>
+
+        <rect class="box-touch" x="196" y="124" width="158" height="104" rx="8"/>
+        <text x="275" y="148" text-anchor="middle">zeigt Website, Konto,</text>
+        <text x="275" y="164" text-anchor="middle">Passkey ja/nein</text>
+        <text class="t-touch" x="275" y="188" text-anchor="middle">Tippen, Touch ID</text>
+        <text x="275" y="212" text-anchor="middle">neuer P-256-Schlüssel</text>
+
+        <text x="244" y="258" text-anchor="middle">ctap.response</text>
+        <line class="ln" x1="308" y1="266" x2="182" y2="266" marker-end="url(#a3)"/>
+        <text x="116" y="292" text-anchor="middle">Public Key, ID</text>
+        <line class="ln" x1="180" y1="300" x2="54" y2="300" marker-end="url(#a3)"/>
+
+        <text class="t-m" x="52" y="330" text-anchor="middle">Website speichert</text>
+        <text class="t-m" x="52" y="345" text-anchor="middle">den Public Key</text>
+      </svg>
+      </div>
+      <figcaption>Ohne die KEEPALIVE-Meldungen würde der Browser nach kurzer Zeit aufgeben, weil er nicht weiß, dass am iPhone jemand gefragt wird.</figcaption>
+    </figure>
+    <ol class="steps">
+      <li><div>Die Website ruft WebAuthn auf. Der Browser schickt <code>authenticatorMakeCredential</code> als CBOR über CTAPHID an das <code>/dev/hidraw</code>-Gerät.</div></li>
+      <li><div><code>phonekey</code> verpackt die Anfrage in <code>ctap.request</code> und schickt sie verschlüsselt ans iPhone. Bis die Antwort da ist, meldet es dem Browser alle 100 ms „warte auf Benutzer“.</div></li>
+      <li><div>Die App zeigt, welcher Rechner fragt, für welche Website (<code>rp.id</code>), für welches Konto und ob ein Passkey entsteht. Du tippst auf Bestätigen, dann kommt Touch ID.</div></li>
+      <li><div>Der Secure Enclave erzeugt einen neuen P-256-Schlüssel. Benutzen lässt er sich nur nach Touch ID mit einem eingelernten Finger, und er verlässt den Chip nie. Die Credential-ID besteht aus 32 Zufallsbytes und benennt den Schlüssel nur.</div></li>
+      <li><div>Die Antwort enthält den öffentlichen Schlüssel, die Credential-ID, das Attestierungsformat <code>none</code> (kein Herstellerzertifikat) und den Zähler 0. Die Website speichert den öffentlichen Schlüssel.</div></li>
+    </ol>
+    <ul class="plain">
+      <li>Ist der Schlüssel für das Konto schon registriert, zeigt die App „Already registered“ und antwortet nach einem Tippen mit <code>CREDENTIAL_EXCLUDED</code>.</li>
+      <li>Lehnst du ab, kommt <code>OPERATION_DENIED</code>. Reagierst du 60 Sekunden lang nicht, kommt <code>USER_ACTION_TIMEOUT</code>.</li>
+      <li>Bricht der Browser ab, wird aus <code>CTAPHID_CANCEL</code> ein <code>ctap.cancel</code>, und die App schließt die Abfrage.</li>
+    </ul>
+  </div>
+
+  <div class="sub" id="anmelden">
+    <h3>Anmelden</h3>
+    <ol class="steps">
+      <li><div>Der Browser schickt <code>authenticatorGetAssertion</code> mit der Website und meist einer Liste erlaubter Credential-IDs. Meldest du dich per Passkey ohne Benutzernamen an, ist die Liste leer.</div></li>
+      <li><div>Die App sucht passende Schlüssel. Findet sie keinen, antwortet sie sofort mit <code>NO_CREDENTIALS</code>, ohne etwas anzuzeigen.</div></li>
+      <li><div>Gibt es für die Website mehrere Passkeys, zeigt die App eine Kontoauswahl. Sonst zeigt sie Website und Konto.</div></li>
+      <li><div>Touch ID gibt den Schlüssel im Secure Enclave zum Signieren frei. Die Antwort trägt die Flags „anwesend“ und „verifiziert“, und der Zähler des Schlüssels steigt um eins.</div></li>
+      <li><div>Der Browser bekommt die Signatur, bei Passkeys auch den Benutzer. Die Website prüft sie mit dem gespeicherten öffentlichen Schlüssel.</div></li>
+    </ol>
+    <p>Manche Programme fragen vorher still nach (<code>up=false</code>), ob ein Schlüssel passt. OpenSSH macht das zum Beispiel, bevor es einen residenten Schlüssel anlegt. Ohne Treffer antwortet das iPhone mit <code>NO_CREDENTIALS</code>. Mit Treffer antwortet es <code>UNSUPPORTED_OPTION</code>, weil der Secure Enclave ohne Touch ID nicht signiert.</p>
+    <div class="note warn">
+      <p>Neue Abfrage, gebaut in PR #9 und noch nicht auf dem iPhone: Bisher tippst du erst auf Bestätigen, danach kommt Touch ID. Künftig öffnet sich Touch ID sofort, bei mehreren Konten direkt nach der Kontowahl. Der Abbrechen-Knopf im Touch-ID-Dialog heißt „Details“. Er lehnt nichts ab, sondern zeigt eine Karte mit Website, Konto und Art der Anfrage, dazu die Knöpfe „Touch ID“ (noch einmal versuchen) und „Decline“. Nur „Decline“ lehnt ab. Außerdem reicht für eine Anmeldung dann ein einziges Touch ID, weil dieselbe Freigabe auch die Signatur im Secure Enclave abdeckt.</p>
+    </div>
+  </div>
+
+  <div class="sub" id="chrome">
+    <h3>Der Chrome-Fehler vom 14. November</h3>
+    <p>Beim ersten Browser-Test auf echtem Linux klappte das Registrieren, das Anmelden nicht. Chrome meldete „Du verwendest einen Sicherheitsschlüssel, der nicht auf dieser Website registriert ist“, und das iPhone zeigte gar keine Abfrage.</p>
+    <figure class="dia">
+      <div class="scroll">
+      <svg viewBox="0 0 360 410" role="img" aria-label="Vorher: Chrome fragt jede ID einzeln still ab. Das iPhone antwortet 0x2E oder 0x2B, Chrome meldet nicht registriert. Nachher: Chrome schickt bis zu 16 IDs in einer Anfrage mit Benutzerbestätigung, das iPhone fragt Touch ID und signiert.">
+        <defs>
+          <marker id="a4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="mk" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="a4w" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="mk-warn" d="M0,0 L10,5 L0,10 z"/></marker>
+          <marker id="a4o" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="mk-ok" d="M0,0 L10,5 L0,10 z"/></marker>
+        </defs>
+        <text class="t-zone" x="8" y="16">Vorher: getInfo ohne Feld 7 und 8</text>
+        <rect class="box" x="14" y="26" width="96" height="30" rx="8"/>
+        <text class="t-b" x="62" y="46" text-anchor="middle">Chrome</text>
+        <rect class="box" x="250" y="26" width="96" height="30" rx="8"/>
+        <text class="t-b" x="298" y="46" text-anchor="middle">iPhone</text>
+        <line class="ln-life" x1="62" y1="56" x2="62" y2="186"/>
+        <line class="ln-life" x1="298" y1="56" x2="298" y2="186"/>
+        <text x="180" y="78" text-anchor="middle">still: ID 1, up=false</text>
+        <line class="ln" x1="62" y1="86" x2="296" y2="86" marker-end="url(#a4)"/>
+        <text class="t-mono" x="180" y="106" text-anchor="middle">0x2E kenne ich nicht</text>
+        <line class="ln-warn" x1="298" y1="114" x2="64" y2="114" marker-end="url(#a4w)"/>
+        <text x="180" y="136" text-anchor="middle">still: ID 2 (deine), up=false</text>
+        <line class="ln" x1="62" y1="144" x2="296" y2="144" marker-end="url(#a4)"/>
+        <text class="t-mono" x="180" y="164" text-anchor="middle">0x2B nur mit Touch ID</text>
+        <line class="ln-warn" x1="298" y1="172" x2="64" y2="172" marker-end="url(#a4w)"/>
+        <text class="t-warn" x="14" y="204">Chrome: „nicht registriert“</text>
+
+        <line class="ln-life" x1="8" y1="224" x2="352" y2="224"/>
+
+        <text class="t-zone" x="8" y="250">Nachher: 16 IDs zu je 32 Byte (PR #8)</text>
+        <rect class="box" x="14" y="260" width="96" height="30" rx="8"/>
+        <text class="t-b" x="62" y="280" text-anchor="middle">Chrome</text>
+        <rect class="box" x="250" y="260" width="96" height="30" rx="8"/>
+        <text class="t-b" x="298" y="280" text-anchor="middle">iPhone</text>
+        <line class="ln-life" x1="62" y1="290" x2="62" y2="380"/>
+        <line class="ln-life" x1="298" y1="290" x2="298" y2="380"/>
+        <text x="180" y="312" text-anchor="middle">eine Anfrage: ID 1 bis 16, up=true</text>
+        <line class="ln" x1="62" y1="320" x2="296" y2="320" marker-end="url(#a4)"/>
+        <text class="t-touch" x="290" y="342" text-anchor="end">Touch ID</text>
+        <text class="t-mono" x="180" y="358" text-anchor="middle">Signatur</text>
+        <line class="ln-ok" x1="298" y1="366" x2="64" y2="366" marker-end="url(#a4o)"/>
+        <text class="t-ok" x="14" y="398">Chrome: angemeldet</text>
+      </svg>
+      </div>
+      <figcaption>Chrome wertet jede Antwort außer „Erfolg“ auf eine stille Probe als „Schlüssel kennt diese ID nicht“. Mit den Feldern 7 und 8 entfällt die Probe.</figcaption>
+    </figure>
+    <p>Gibt ein Schlüssel in <code>getInfo</code> keine maximale ID-Länge an, schickt Chrome die erlaubten IDs einzeln und jede zuerst als stille Probe. Auf die Probe mit der richtigen ID kann das iPhone nicht signieren, also antwortet es <code>UNSUPPORTED_OPTION</code>, und Chrome hält den Schlüssel für fremd. Bei webauthn.io mit dem Benutzernamen „Test“ hatten viele Leute Schlüssel registriert, deshalb stand mehr als eine ID in der Liste.</p>
+    <p>Seit PR #8 meldet das iPhone, dass es 16 IDs pro Anfrage annimmt und jede ID 32 Byte lang ist. Chrome filtert dann fremde, längere IDs heraus und schickt den Rest in einer normalen Anfrage. Erst bei mehr als 16 passenden IDs probt Chrome wieder einzeln. Der Fix muss noch aufs iPhone, danach wird der Browser-Test wiederholt.</p>
+  </div>
+
+  <div class="sub">
+    <h3>Wofür es heute geht</h3>
+    <div class="tbl">
+      <table>
+        <thead><tr><th>Einsatz</th><th>Stand</th></tr></thead>
+        <tbody>
+          <tr><td>ssh</td><td><code>ssh-keygen -t ecdsa-sk</code>, auch mit <code>-O resident -O verify-required</code>. Fragt OpenSSH nach einer PIN, drückst du Enter, die Verifikation macht Touch ID. Auf echtem Linux getestet.</td></tr>
+          <tr><td>Websites</td><td>Chrome und Firefox, als Sicherheitsschlüssel oder Passkey. Registrieren geht, Anmelden nach dem Fix aus PR #8 erneut testen.</td></tr>
+          <tr><td>libfido2</td><td><code>fido2-token -L</code> und <code>-I</code> sehen den Schlüssel korrekt.</td></tr>
+          <tr><td>pam-u2f</td><td>Sollte gehen (sudo oder Login per Touch ID), noch nicht getestet.</td></tr>
+          <tr><td>Selbsttest</td><td><code>phonekey fido selftest</code> legt einen Test-Passkey für <code>phonekey.test</code> an, meldet sich zweimal an und prüft alles selbst.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section id="einrichtung">
+  <h2>Einrichtung auf Linux</h2>
+  <p>Voraussetzungen sind usbmuxd und libimobiledevice (für <code>idevicepair</code>), zum Prüfen libfido2 mit <code>fido2-token</code> und zum Bauen Go ab Version 1.21. Root braucht es nur einmal:</p>
+<pre><span class="c"># im Ordner linux/ des Repos</span>
+go build ./cmd/phonekey
+sudo install -m 0755 phonekey /usr/local/bin/phonekey
+sudo install -m 0644 contrib/70-phonekey-uhid.rules /etc/udev/rules.d/
+echo uhid | sudo tee /etc/modules-load.d/uhid.conf
+sudo udevadm control --reload
+sudo modprobe uhid
+sudo udevadm trigger --action=add --subsystem-match=misc --sysname-match=uhid
+
+<span class="c"># mit angestecktem iPhone und offener App</span>
+phonekey pair
+mkdir -p ~/.config/systemd/user
+cp contrib/phonekey-fido.service ~/.config/systemd/user/
+systemctl --user enable --now phonekey-fido</pre>
+  <p>Die udev-Regel markiert <code>/dev/uhid</code> mit <code>uaccess</code>. Damit gibt systemd-logind dem Benutzer, der gerade am Rechner angemeldet ist, Zugriff, ohne Gruppe und ohne neu anmelden. Über eine reine SSH-Sitzung gilt das nicht. Für eine Test-VM beschreibt <code>linux/README.md</code> den Weg über eine Gruppe.</p>
+  <p>Den Dienst erst nach dem Pairing aktivieren. Hängt ein ungepairtes iPhone am Kabel, beendet sich <code>phonekey fido run</code> mit einem Fehler, und systemd würde es alle fünf Sekunden neu starten.</p>
+<pre><span class="c"># prüfen</span>
+fido2-token -L
+<span class="c">/dev/hidraw11: vendor=0x1209, product=0x0001 ( PhoneKey)</span>
+phonekey fido selftest
+<span class="c">PASS. The test passkey for phonekey.test stays on the phone …</span></pre>
+</section>
+
+<section id="schluessel">
+  <h2>Wo die Schlüssel liegen</h2>
+  <div class="tbl">
+    <table>
+      <thead><tr><th>Gerät</th><th>Was</th><th>Wo</th></tr></thead>
+      <tbody>
+        <tr><td>iPhone</td><td>FIDO-Schlüssel (P-256)</td><td>Secure Enclave, nur nach Touch ID nutzbar, verlässt den Chip nie</td></tr>
+        <tr><td>iPhone</td><td>Liste der Credentials (Website, Konto, ID)</td><td>Schlüsselbund, „nur dieses Gerät“: kein Backup, keine iCloud</td></tr>
+        <tr><td>iPhone</td><td>Sitzungsschlüssel (X25519), gepairte Rechner</td><td>Schlüsselbund, „nur dieses Gerät“</td></tr>
+        <tr><td>Linux</td><td>Rechner-Schlüssel (X25519)</td><td><code>~/.config/phonekey/host.key</code>, Rechte 0600</td></tr>
+        <tr><td>Linux</td><td>gepairte iPhones (öffentliche Schlüssel)</td><td><code>~/.config/phonekey/phones.json</code></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="note">Die FIDO-Schlüssel sind nirgends gesichert. Geht das iPhone kaputt, sind sie weg. Für jedes Konto brauchst du deshalb einen zweiten Weg hinein, also einen zweiten Schlüssel oder Wiederherstellungscodes. In der App unter „Passkeys &amp; security keys“ siehst und löschst du die gespeicherten Schlüssel.</p>
+</section>
+
+<section id="grenzen">
+  <h2>Grenzen und Sicherheit</h2>
+  <ul class="plain">
+    <li>Für das iPhone 7 ist bei iOS 15.8 Schluss. Die Passkey-Schnittstellen von iOS 16 und 17 fehlen, deshalb baut PhoneKey den Authenticator selbst.</li>
+    <li>Die App arbeitet nur im Vordergrund. Ohne Desk-Modus und geführten Zugriff verschwindet der Schlüssel, sobald das iPhone sperrt.</li>
+    <li>Bluetooth („Handy verwenden“, hybrid/caBLE) geht nicht, weil iOS Apps die nötigen BLE-Daten nicht senden lässt. Das USB-Kabel ersetzt diesen Weg.</li>
+    <li>Nur ES256, weil der Secure Enclave nur P-256 kann. Für WebAuthn und OpenSSH reicht das.</li>
+    <li>Es gibt keine Herstellerbestätigung. Dienste, die nur zertifizierte Schlüssel annehmen (manche Firmenkonten), lehnen PhoneKey ab.</li>
+    <li>Der A10-Chip hat den Bootrom-Fehler checkm8, den Apple nicht beheben kann. Ein gestohlenes iPhone gibt einem Angreifer mehr Möglichkeiten als ein gestohlener Hardware-Schlüssel. Für einen Schlüssel, der am Schreibtisch bleibt, ist das vertretbar, als einziger Faktor nicht.</li>
+    <li>PhoneKey nicht als Sicherheitsschlüssel für die Apple-ID registrieren. Apple verlangt dort zwei zertifizierte Schlüssel, und eine Sperre träfe das Haupt-Konto.</li>
+  </ul>
+</section>
+
+<section id="roadmap">
+  <h2>Roadmap</h2>
+  <ol class="road">
+    <li><span class="mark ok"></span><div class="body"><span class="state">Phase 0 · fertig</span><h3>Projektstart</h3><p>Repo, Xcode-Projekt, Dokumentation.</p></div></li>
+    <li><span class="mark ok"></span><div class="body"><span class="state">Phase 1 · fertig</span><h3>Verbindung und Desk-Modus</h3><p>usbmuxd-Tunnel, verschlüsselte Sitzung, Pairing per QR-Code, Status, Fotos, Desk-Modus. Auf dem iPhone 7 mit iOS 15.8.2 geprüft.</p></div></li>
+    <li><span class="mark warn"></span><div class="body"><span class="state">Phase 2 · fertig, Nacharbeit offen</span><h3>Sicherheitsschlüssel und Passkeys</h3><p>Auf echtem Linux mit Selbsttest, libfido2 und OpenSSH geprüft. Offen: Chrome-Fix (PR #8, gemergt) und neue Touch-ID-Abfrage (PR #9) aufs iPhone bringen, dann Chrome und Firefox noch einmal testen.</p></div></li>
+    <li><span class="mark"></span><div class="body"><span class="state">Phase 3 · Spezifikation in PR #6</span><h3>Mehr FIDO</h3>
+      <ul class="plain">
+        <li>3a, hmac-secret: LUKS-Laufwerke mit <code>systemd-cryptenroll</code> entsperren, solange du angemeldet bist (Datenpartitionen, externe Platten, nicht das Root-Laufwerk beim Booten). Das Geheimnis pro Schlüssel liegt verschlüsselt mit dessen Secure-Enclave-Schlüssel und ist nur zum Rechnen kurz im Speicher der App.</li>
+        <li>3b, PIN mit Touch ID: OpenSSH (<code>ssh-keygen -K</code>, <code>ssh-add -K</code>) und die Schlüsselverwaltung in Chrome verlangen fest eine PIN. Die PIN liegt nur als Hash im Schlüsselbund des iPhones, jede Nutzung fragt zusätzlich Touch ID ab, und eine vergessene PIN setzt du in der App mit Touch ID zurück. Die Schlüssel bleiben dabei erhalten. Beim normalen Anmelden bleibt es bei Touch ID.</li>
+        <li>U2F (CTAP1): nur bei Bedarf. Aktuelle Browser, OpenSSH und pam-u2f sprechen CTAP2.</li>
+      </ul></div></li>
+    <li><span class="mark"></span><div class="body"><span class="state">Phase 4 · geplant</span><h3>Kamera und Mikrofon</h3><p>Die iPhone-Kamera als Webcam über <code>v4l2loopback</code>, das Mikrofon als PipeWire-Quelle. Zuerst kommt der Protokollteil für Streams.</p></div></li>
+    <li><span class="mark"></span><div class="body"><span class="state">Phase 5 · optional</span><h3>macOS als Rechner</h3><p>Bräuchte einen virtuellen HID-Treiber über DriverKit und eine Berechtigung von Apple.</p></div></li>
+  </ol>
+</section>
+
+<section id="begriffe">
+  <h2>Begriffe</h2>
+  <dl class="gloss">
+    <div><dt>CTAP2</dt><dd>Das Protokoll zwischen Browser oder Programm und einem Sicherheitsschlüssel. Nachrichten sind in CBOR kodiert, einem kompakten Binärformat ähnlich JSON.</dd></div>
+    <div><dt>CTAPHID</dt><dd>Die Verpackung von CTAP in 64-Byte-Pakete über USB-HID, inklusive KEEPALIVE und CANCEL.</dd></div>
+    <div><dt>uhid und hidraw</dt><dd><code>/dev/uhid</code> lässt ein Programm ein HID-Gerät vortäuschen. Linux zeigt es anderen Programmen als <code>/dev/hidrawN</code>, wie einen echten USB-Schlüssel.</dd></div>
+    <div><dt>usbmuxd</dt><dd>Der Dienst, über den Rechner per USB TCP-Verbindungen zu Apps auf einem iPhone öffnen.</dd></div>
+    <div><dt>Noise</dt><dd>Ein Rahmenwerk für verschlüsselte Handshakes. XX heißt: Beide Seiten zeigen ihren Schlüssel verschlüsselt vor. psk3 mischt zusätzlich ein gemeinsames Geheimnis ein.</dd></div>
+    <div><dt>Secure Enclave</dt><dd>Ein eigener Sicherheitschip im iPhone. Er erzeugt Schlüssel, die ihn nie verlassen, und signiert erst nach Touch ID.</dd></div>
+    <div><dt>Passkey und Sicherheitsschlüssel</dt><dd>Ein Passkey ist ein auffindbarer Schlüssel (<code>rk</code>): Die Anmeldung geht ohne Benutzernamen. Ein klassischer Sicherheitsschlüssel braucht die ID von der Website. PhoneKey speichert beide.</dd></div>
+    <div><dt>UP und UV</dt><dd>User Presence (jemand hat bestätigt) und User Verification (es war der richtige Mensch, hier per Touch ID).</dd></div>
+    <div><dt>credProtect</dt><dd>Legt fest, wann ein Schlüssel ohne Verifikation benutzt werden darf. OpenSSH verlangt die Erweiterung für residente Schlüssel. Bei PhoneKey ist jede Stufe erfüllt, weil immer Touch ID gefragt wird.</dd></div>
+    <div><dt>hmac-secret</dt><dd>Eine Erweiterung, mit der ein Schlüssel ein festes Geheimnis pro Website ausrechnet. Darauf baut das Entsperren von LUKS-Laufwerken auf.</dd></div>
+    <div><dt>AAGUID und Attestierung</dt><dd>Die AAGUID kennzeichnet das Schlüsselmodell. Die Attestierung wäre ein Herstellerzertifikat, das bestätigt, dass der Schlüssel echt ist. PhoneKey liefert keines.</dd></div>
+  </dl>
+</section>
+
+<footer>
+  <p>Quellen: <code>docs/protocol.md</code>, <code>docs/architecture.md</code> und <code>linux/README.md</code> im Repo <a href="https://github.com/Gerry3010/phonekey">Gerry3010/phonekey</a>.</p>
+  <p>Experimentell. PhoneKey nie als einzigen Sicherheitsschlüssel verwenden.</p>
+</footer>
+</main>
+</body>
+</html>

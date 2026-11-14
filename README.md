@@ -19,7 +19,9 @@ phone offers into ordinary Linux devices:
 | Microphone | PipeWire source, or recordings on request |
 
 More in [docs/architecture.md](docs/architecture.md). The contract between phone
-and daemon is [docs/protocol.md](docs/protocol.md).
+and daemon is [docs/protocol.md](docs/protocol.md). A walkthrough in German with
+diagrams of every flow is in [docs/how-it-works.de.html](docs/how-it-works.de.html)
+(download it and open it in a browser; GitHub shows HTML only as source).
 
 ## Status
 
