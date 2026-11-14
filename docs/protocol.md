@@ -1,6 +1,6 @@
 # phonekey wire protocol
 
-**Protocol version 1** (Phase 1: session, pairing, status, photo).
+**Protocol version 1** (session, pairing, status, photo; FIDO from Phase 2).
 
 This is the contract between the iOS app (`ios/`, the **phone**) and the daemon
 (`linux/`, the **host**). Both sides implement this document. Changes go through
@@ -218,6 +218,34 @@ it on screen and iOS plays the shutter sound.
 | `capture_failed` | taking the photo failed |
 | `internal` | anything else |
 
+### fido
+
+Feature `fido` in the phone's `hello`. The phone is a complete CTAP2
+authenticator; the host only carries CTAPHID payloads between a virtual USB
+security key and the phone ([§10](#10-fido-security-key)).
+
+```json
+{"t":"ctap.request","id":4,"cmd":16,"data":"BKA…"}
+{"t":"ctap.response","id":4,"data":"AKk…"}
+{"t":"ctap.cancel","id":4}
+```
+
+- `cmd` is the CTAPHID command: `16` (`0x10`, CBOR) or `8` (`0x08`, WINK).
+- `data` is standard base64 with padding (the JSON encoding of a byte array in
+  Go and Swift). For CBOR the request is the CTAP command byte followed by the
+  CBOR parameters; the response is the CTAP status byte followed by the CBOR
+  response. For WINK both are empty.
+- The phone answers every `ctap.request` with exactly one `ctap.response`, also
+  for errors (a CTAP status byte other than `0x00`). Protocol errors such as a
+  missing `data` field use the `error` message with code `bad_request`.
+- `ctap.cancel` has no answer of its own. If request `id` is still waiting for
+  the user, the phone stops waiting and answers it with status `0x2D`
+  (`CTAP2_ERR_KEEPALIVE_CANCEL`).
+- The phone handles one CTAP request at a time across all connections. A second
+  one is answered with `0x06` (`CTAP1_ERR_CHANNEL_BUSY`). While a request waits
+  for the user, the phone keeps reading and answering other messages
+  (`ping`, `status.get`, `ctap.cancel`).
+
 ## 6. Pairing
 
 1. The host creates its static key on first use and a fresh 32-byte random PSK.
@@ -275,8 +303,77 @@ header, `version` = 1, `message` = 8 for plist, `tag`) followed by an XML plist.
   TCP tunnel to the phone. 3 means connection refused (app not running or not in
   the foreground).
 
-## 10. Changes
+## 10. FIDO security key
+
+What the phone implements, so host and phone agree on behaviour. References:
+CTAP 2.0 (FIDO Alliance, "Client to Authenticator Protocol", Proposed Standard
+2019) and WebAuthn Level 2.
+
+### authenticatorGetInfo (`0x04`)
+
+| Key | Value |
+|---|---|
+| 1 versions | `["FIDO_2_0"]` |
+| 3 aaguid | `4e3b1fe3-c75c-4055-b791-c999ff915951` |
+| 4 options | `{"rk": true, "up": true, "uv": true, "plat": false}` (no `clientPin`) |
+| 5 maxMsgSize | 1200 |
+| 9 transports | `["usb"]` |
+| 10 algorithms | `[{"alg": -7, "type": "public-key"}]` |
+
+### authenticatorMakeCredential (`0x01`)
+
+- Only ES256 (`alg` -7). Without it in `pubKeyCredParams`: `0x26`
+  (`CTAP2_ERR_UNSUPPORTED_ALGORITHM`).
+- `excludeList` hit: the phone shows that the key is already registered, waits
+  for a tap, then answers `0x19` (`CTAP2_ERR_CREDENTIAL_EXCLUDED`).
+- A zero-length `pinAuth` (authenticator selection): after a tap on the phone,
+  `0x35` (`CTAP2_ERR_PIN_NOT_SET`). A non-empty `pinAuth`: `0x36`
+  (`CTAP2_ERR_PIN_AUTH_INVALID`), since there is no PIN.
+- Otherwise the phone shows the site (`rp.id`), the account and whether it
+  becomes a passkey (`rk`), then asks for Touch ID. Declined or failed: `0x27`
+  (`CTAP2_ERR_OPERATION_DENIED`). No answer within 60 s: `0x2F`
+  (`CTAP2_ERR_USER_ACTION_TIMEOUT`).
+- A new P-256 key is created in the Secure Enclave, usable only after Touch ID
+  with any enrolled finger. The credential ID is 32 random bytes; it names the
+  key on the phone and carries no key material.
+- Attestation format `none` with an empty `attStmt`. Flags `UP | UV | AT`
+  (`0x45`), counter 0.
+- Every credential is stored on the phone, discoverable or not.
+
+### authenticatorGetAssertion (`0x02`)
+
+- Candidates: the stored credentials in `allowList` for `rpId`, or without
+  `allowList` all discoverable credentials for `rpId`. None: `0x2E`
+  (`CTAP2_ERR_NO_CREDENTIALS`).
+- `options.up = false`: `0x2B` (`CTAP2_ERR_UNSUPPORTED_OPTION`). A Secure
+  Enclave key cannot sign without Touch ID.
+- Several discoverable candidates: the phone lets the user pick one (it has a
+  display), so the response never sets `numberOfCredentials` and
+  `authenticatorGetNextAssertion` (`0x08`) answers `0x30`
+  (`CTAP2_ERR_NOT_ALLOWED`).
+- The phone shows the site and the account; Touch ID unlocks the signature.
+  Flags `UP | UV` (`0x05`); the per-credential counter goes up by one.
+- The response contains `credential`, `authData`, `signature` (DER) and, for
+  discoverable credentials, `user` (`id`, `name`, `displayName`).
+
+### Other commands
+
+`authenticatorReset` (`0x07`) answers `0x30` (`CTAP2_ERR_NOT_ALLOWED`):
+credentials are only deleted in the app. `authenticatorClientPIN` (`0x06`) and
+anything else answer `0x01` (`CTAP1_ERR_INVALID_COMMAND`).
+
+### Host side
+
+The host creates a virtual USB HID device (usage page `0xF1D0`) only while a
+session with the phone is up, so applications see the key appear and disappear
+like a real one. While a CBOR request waits for the phone it sends
+`CTAPHID_KEEPALIVE` with status `UPNEEDED` every 100 ms, and it forwards
+`CTAPHID_CANCEL` as `ctap.cancel`. CTAPHID `MSG` (U2F) is not supported
+(`NMSG` capability).
+
+## 11. Changes
 
 | Version | Change |
 |---|---|
 | 1 | first version: session, pairing, hello, ping, status, photo |
+| 1 + `fido` | `ctap.request`, `ctap.response`, `ctap.cancel` (Phase 2) |
