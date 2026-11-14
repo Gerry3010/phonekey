@@ -102,6 +102,16 @@ type Request struct {
 	Camera       string   `json:"camera,omitempty"`
 	MaxDimension *int     `json:"max_dimension,omitempty"`
 	Quality      *float64 `json:"quality,omitempty"`
+	// ctap.request: CTAPHID command and payload.
+	Cmd  *int   `json:"cmd,omitempty"`
+	Data []byte `json:"data,omitempty"`
+}
+
+// CTAPResponse answers a ctap.request: CTAP status byte + CBOR.
+type CTAPResponse struct {
+	T    string `json:"t"`
+	ID   uint64 `json:"id"`
+	Data []byte `json:"data"`
 }
 
 type StatusReport struct {

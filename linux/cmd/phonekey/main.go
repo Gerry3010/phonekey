@@ -31,6 +31,9 @@ Usage:
   phonekey status                  show the phone's status
   phonekey ping                    measure a round trip
   phonekey photo [-o FILE]         take a photo
+  phonekey fido run                be a USB security key while the phone is connected (Linux)
+  phonekey fido info               show the phone's authenticator info
+  phonekey fido selftest           register and use a test passkey, verify on this side
   phonekey version
 
 Connection flags (all commands that talk to the phone):
@@ -65,6 +68,8 @@ func main() {
 		err = ping(ctx, args)
 	case "photo":
 		err = photo(ctx, args)
+	case "fido":
+		err = fido(ctx, args)
 	case "version", "-version", "--version":
 		fmt.Println("phonekey", version)
 	case "help", "-h", "-help", "--help":
