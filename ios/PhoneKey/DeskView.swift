@@ -57,10 +57,17 @@ private struct DeskStatusLine: View {
     @ObservedObject var hosts: HostStore
 
     var body: some View {
-        Text(text)
-            .font(.callout)
-            .foregroundColor(Color(white: 0.4))
-            .multilineTextAlignment(.center)
+        VStack(spacing: 6) {
+            Text(text)
+                .font(.callout)
+                .foregroundColor(Color(white: 0.4))
+                .multilineTextAlignment(.center)
+            if server.state == .listening, server.connectedHosts.isEmpty, let contact = server.lastContact {
+                LastContactText(contact: contact, hosts: hosts)
+                    .font(.footnote)
+                    .foregroundColor(Color(white: 0.3))
+            }
+        }
     }
 
     private var text: String {

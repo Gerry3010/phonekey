@@ -39,6 +39,8 @@ final class AppModel: ObservableObject {
         photosAllowed = UserDefaults.standard.bool(forKey: "photosAllowed")
         deskMode = UserDefaults.standard.bool(forKey: "deskMode")
         UIDevice.current.isBatteryMonitoringEnabled = true
+        // The property initializer ran before monitoring was on and saw "unknown".
+        battery = BatteryInfo.current
 
         do {
             let identity = try Identity.load()
@@ -118,7 +120,8 @@ final class AppModel: ObservableObject {
     }
 
     private func status(id: UInt64?) -> StatusMessage {
-        StatusMessage(
+        battery = BatteryInfo.current
+        return StatusMessage(
             id: id,
             battery: .init(level: battery.level, state: battery.state),
             thermal: DeviceInfo.thermalState,

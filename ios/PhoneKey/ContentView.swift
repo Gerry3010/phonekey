@@ -109,8 +109,15 @@ struct ServerStatusRow: View {
                 .foregroundColor(.red)
         case .listening:
             if server.connectedHosts.isEmpty {
-                Label("Ready, waiting for a computer", systemImage: "cable.connector")
-                    .foregroundColor(.secondary)
+                VStack(alignment: .leading, spacing: 4) {
+                    Label("Ready, waiting for a computer", systemImage: "cable.connector")
+                        .foregroundColor(.secondary)
+                    if let contact = server.lastContact {
+                        LastContactText(contact: contact, hosts: hosts)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
             } else {
                 Label("Connected: \(connectedNames)", systemImage: "checkmark.circle.fill")
                     .foregroundColor(.green)
@@ -120,6 +127,18 @@ struct ServerStatusRow: View {
 
     private var connectedNames: String {
         Array(Set(server.connectedHosts)).map { hosts.name(for: $0) ?? "unknown" }.sorted().joined(separator: ", ")
+    }
+}
+
+/// "Last contact: MacBook, 5 sec ago", counting up live.
+struct LastContactText: View {
+    let contact: PhoneServer.Contact
+    @ObservedObject var hosts: HostStore
+
+    var body: some View {
+        Text("Last contact: \(hosts.name(for: contact.hostKey) ?? "unknown"), ")
+            + Text(contact.date, style: .relative)
+            + Text(" ago")
     }
 }
 

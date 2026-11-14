@@ -17,9 +17,17 @@ final class PhoneServer: ObservableObject, @unchecked Sendable {
 
     static let maxConnections = 4
 
+    struct Contact: Equatable {
+        let hostKey: Data
+        let date: Date
+    }
+
     @Published private(set) var state: State = .stopped
     /// Keys of authenticated hosts, once per open connection.
     @Published private(set) var connectedHosts: [Data] = []
+    /// The most recent authenticated host and when its connection ended (or
+    /// started, while it is still open). Short CLI calls only show up here.
+    @Published private(set) var lastContact: Contact?
 
     private let identity: Curve25519.KeyAgreement.PrivateKey
     private let registry: HostRegistry
@@ -110,7 +118,10 @@ final class PhoneServer: ObservableObject, @unchecked Sendable {
         var authenticatedKey: Data?
         session.onAuthenticated = { [weak self] key in
             authenticatedKey = key
-            DispatchQueue.main.async { self?.connectedHosts.append(key) }
+            DispatchQueue.main.async {
+                self?.connectedHosts.append(key)
+                self?.lastContact = Contact(hostKey: key, date: Date())
+            }
         }
         Task { [hello, handler, log] in
             do {
@@ -122,6 +133,7 @@ final class PhoneServer: ObservableObject, @unchecked Sendable {
             DispatchQueue.main.async {
                 if let key = authenticatedKey, let i = self.connectedHosts.firstIndex(of: key) {
                     self.connectedHosts.remove(at: i)
+                    self.lastContact = Contact(hostKey: key, date: Date())
                 }
             }
         }
