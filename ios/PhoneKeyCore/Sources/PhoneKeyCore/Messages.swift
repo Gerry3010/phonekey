@@ -46,10 +46,24 @@ public struct Request: Decodable, Equatable {
     public var camera: String?
     public var maxDimension: Int?
     public var quality: Double?
+    /// ctap.request: CTAPHID command and payload (base64 in JSON).
+    public var cmd: Int?
+    public var data: Data?
 
     enum CodingKeys: String, CodingKey {
-        case t, id, camera, quality
+        case t, id, camera, quality, cmd, data
         case maxDimension = "max_dimension"
+    }
+}
+
+public struct CTAPResponseMessage: Encodable {
+    public var t = "ctap.response"
+    public var id: UInt64?
+    public var data: Data
+
+    public init(id: UInt64?, data: Data) {
+        self.id = id
+        self.data = data
     }
 }
 
