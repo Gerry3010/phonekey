@@ -26,13 +26,21 @@ public enum SessionError: Error, Equatable {
 
 /// The phone (responder) side of one connection: preamble, handshake, host
 /// check, hello, then requests until the stream ends.
+///
+/// Handlers may keep work running after they return and call `send` later
+/// from any task (a CTAP request waiting for the user, while the session keeps
+/// reading `ctap.cancel`). Sending is serialized; receiving happens only in `run`.
 public final class PhoneSession {
     public typealias Handler = (Request, PhoneSession) async throws -> Void
 
     private let stream: ByteStream
     private let identity: Curve25519.KeyAgreement.PrivateKey
     private let registry: HostRegistry
-    private var ciphers: TransportCiphers?
+    // Separate properties: the send side is used under `writeLock` from any
+    // task, the receive side only by the read loop.
+    private var sendCipher: CipherState?
+    private var receiveCipher: CipherState?
+    private let writeLock = AsyncLock()
 
     public private(set) var mode: Wire.Mode?
     public private(set) var hostKey: Data?
@@ -153,7 +161,9 @@ public final class PhoneSession {
         _ = try hs.readMessage(try await readFrame())
         try await stream.write(Wire.frame(try hs.writeMessage()))
         _ = try hs.readMessage(try await readFrame())
-        ciphers = try hs.split()
+        let ciphers = try hs.split()
+        sendCipher = ciphers.send
+        receiveCipher = ciphers.receive
         guard let remote = hs.remoteStatic else { throw NoiseError.handshakeIncomplete }
         return remote
     }
@@ -167,14 +177,49 @@ public final class PhoneSession {
 
     private func receive() async throws -> TransportMessage {
         let frame = try await readFrame()
-        guard ciphers != nil else { throw NoiseError.handshakeIncomplete }
-        return try TransportMessage.decode(try ciphers!.receive.decrypt(ciphertext: frame))
+        guard receiveCipher != nil else { throw NoiseError.handshakeIncomplete }
+        return try TransportMessage.decode(try receiveCipher!.decrypt(ciphertext: frame))
     }
 
+    /// Encrypts and writes under one lock, so nonces reach the wire in order.
     private func writeTransport(_ plaintext: Data) async throws {
-        guard ciphers != nil else { throw NoiseError.handshakeIncomplete }
-        let ciphertext = try ciphers!.send.encrypt(plaintext: plaintext)
+        await writeLock.acquire()
+        defer { writeLock.release() }
+        guard sendCipher != nil else { throw NoiseError.handshakeIncomplete }
+        let ciphertext = try sendCipher!.encrypt(plaintext: plaintext)
         try await stream.write(Wire.frame(ciphertext))
+    }
+}
+
+/// A FIFO mutex for async code.
+final class AsyncLock {
+    private let lock = NSLock()
+    private var held = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func acquire() async {
+        lock.lock()
+        if !held {
+            held = true
+            lock.unlock()
+            return
+        }
+        await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+            lock.unlock()
+        }
+    }
+
+    func release() {
+        lock.lock()
+        if waiters.isEmpty {
+            held = false
+            lock.unlock()
+        } else {
+            let next = waiters.removeFirst()
+            lock.unlock()
+            next.resume() // ownership passes to `next`
+        }
     }
 }
 

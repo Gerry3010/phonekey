@@ -1,0 +1,13 @@
+# systemd user unit: PhoneKey as a USB security key whenever the iPhone is
+# connected. Install to ~/.config/systemd/user/ and run
+#   systemctl --user enable --now phonekey-fido
+[Unit]
+Description=PhoneKey: iPhone as a FIDO2 security key
+
+[Service]
+ExecStart=/usr/local/bin/phonekey fido run
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

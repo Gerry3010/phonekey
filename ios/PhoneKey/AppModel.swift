@@ -14,6 +14,13 @@ final class AppModel: ObservableObject {
     private let camera = CameraService()
     private let log = Logger(subsystem: "net.geraldhofbauer.phonekey", category: "app")
 
+    // FIDO security key
+    let credentials: KeychainCredentialStore
+    let fidoPrompts = FIDOPrompts()
+    private let authenticator: Authenticator
+    /// The one CTAP request being worked on, across all connections.
+    private var ctapJob: (session: ObjectIdentifier, id: UInt64?, task: Task<Void, Never>)?
+
     @Published var photosAllowed: Bool {
         didSet { UserDefaults.standard.set(photosAllowed, forKey: "photosAllowed") }
     }
@@ -30,6 +37,8 @@ final class AppModel: ObservableObject {
     /// A pairing URL opened from outside (QR code in the Camera app, simctl).
     @Published var proposedInvite: PairingInvite?
     @Published var showPairing = false
+    /// Set briefly when a host sends CTAPHID WINK.
+    @Published private(set) var winking = false
     var scannerActive = false
 
     private var savedBrightness: CGFloat?
@@ -42,16 +51,22 @@ final class AppModel: ObservableObject {
         // The property initializer ran before monitoring was on and saw "unknown".
         battery = BatteryInfo.current
 
+        let keys = SecureEnclaveKeys()
+        credentials = KeychainCredentialStore(keys: keys)
+        authenticator = Authenticator(store: credentials, keys: keys, ui: fidoPrompts)
+
         do {
             let identity = try Identity.load()
             let hello = HelloMessage.phone(appVersion: AppInfo.current.version,
                                            device: DeviceInfo.helloDevice,
-                                           features: ["status", "photo"])
+                                           features: ["status", "photo", "fido"])
             startupError = nil
-            server = PhoneServer(identity: identity, registry: hosts, hello: hello) { [weak self] request, session in
+            server = PhoneServer(identity: identity, registry: hosts, hello: hello, handler: { [weak self] request, session in
                 guard let self else { throw ErrorMessage(id: request.id, code: .internal) }
                 try await self.handle(request, session)
-            }
+            }, onSessionEnd: { [weak self] session in
+                Task { @MainActor in self?.sessionEnded(ObjectIdentifier(session)) }
+            })
         } catch {
             startupError = "The phone key could not be loaded from the keychain (\(error))."
         }
@@ -60,6 +75,12 @@ final class AppModel: ObservableObject {
             NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
                 Task { @MainActor in self?.battery = BatteryInfo.current }
             }
+        }
+
+        // A prompt in desk mode lights the screen up until it is answered.
+        fidoPrompts.onActiveChange = { [weak self] active in
+            guard let self, self.deskMode else { return }
+            UIScreen.main.brightness = active ? 0.6 : 0
         }
     }
 
@@ -114,9 +135,63 @@ final class AppModel: ObservableObject {
             try await session.send(await status(id: request.id))
         case "photo.capture":
             try await photo(request, session)
+        case "ctap.request":
+            try await startCTAP(request, session)
+        case "ctap.cancel":
+            await cancelCTAP(request.id, session: ObjectIdentifier(session))
         default:
             throw ErrorMessage(id: request.id, code: .unknownType, message: "Unknown request \(request.t).")
         }
+    }
+
+    // MARK: FIDO
+
+    nonisolated private func startCTAP(_ request: Request, _ session: PhoneSession) async throws {
+        let id = request.id
+        guard let cmd = request.cmd, let data = request.data else {
+            throw ErrorMessage(id: id, code: .badRequest, message: "ctap.request needs cmd and data.")
+        }
+        switch cmd {
+        case 0x08: // WINK
+            await wink()
+            try await session.send(CTAPResponseMessage(id: id, data: Data()))
+        case 0x10: // CBOR
+            let started = await MainActor.run { () -> Bool in
+                guard ctapJob == nil else { return false }
+                fidoPrompts.hostName = session.hostKey.flatMap { hosts.name(for: $0) }
+                let task = Task { [authenticator] in
+                    // Runs on after the handler returns, so the session keeps
+                    // reading (ctap.cancel) while the user decides.
+                    let response = await authenticator.handle(data)
+                    try? await session.send(CTAPResponseMessage(id: id, data: response))
+                    await MainActor.run { self.ctapJob = nil }
+                }
+                ctapJob = (ObjectIdentifier(session), id, task)
+                return true
+            }
+            if !started {
+                try await session.send(CTAPResponseMessage(id: id, data: Data([CTAPStatus.channelBusy.rawValue])))
+            }
+        default:
+            try await session.send(CTAPResponseMessage(id: id, data: Data([CTAPStatus.invalidCommand.rawValue])))
+        }
+    }
+
+    private func cancelCTAP(_ id: UInt64?, session: ObjectIdentifier) {
+        guard let job = ctapJob, job.session == session, job.id == id else { return }
+        job.task.cancel()
+    }
+
+    /// A connection ended: whatever it asked for is no longer wanted.
+    private func sessionEnded(_ session: ObjectIdentifier) {
+        if let job = ctapJob, job.session == session {
+            job.task.cancel()
+        }
+    }
+
+    private func wink() {
+        winking = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { self.winking = false }
     }
 
     private func status(id: UInt64?) -> StatusMessage {

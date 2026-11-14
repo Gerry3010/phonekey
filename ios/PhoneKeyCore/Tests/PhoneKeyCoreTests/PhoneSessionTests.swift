@@ -216,6 +216,52 @@ final class PhoneSessionTests: XCTestCase {
         _ = await task.result
     }
 
+    /// A handler that keeps working after it returns (like a CTAP request
+    /// waiting for Touch ID) must not block ping, and concurrent sends must
+    /// reach the host in nonce order.
+    func testLongRunningWorkAndConcurrentSends() async throws {
+        let registry = TestRegistry()
+        let (hostEnd, phoneEnd) = PipeEnd.pair()
+        let host = TestHost(stream: hostEnd)
+        registry.paired.insert(host.publicKey)
+        let session = PhoneSession(stream: phoneEnd, identity: .init(), registry: registry)
+        let task = Task { [hello] in
+            try await session.run(hello: hello) { request, session in
+                guard request.t == "ctap.request" else { throw ErrorMessage(id: request.id, code: .unknownType) }
+                Task {
+                    try await Task.sleep(nanoseconds: 100_000_000)
+                    try await withThrowingTaskGroup(of: Void.self) { group in
+                        for i in 0..<20 {
+                            group.addTask { try await session.send(PongMessage(id: UInt64(100 + i))) }
+                        }
+                        try await group.waitForAll()
+                    }
+                    try await session.send(CTAPResponseMessage(id: request.id, data: Data([0x00, 0xA0])))
+                }
+            }
+        }
+
+        _ = try await host.connect(mode: .session)
+        _ = try await host.receiveJSON() // hello
+        try await host.send(json: #"{"t":"ctap.request","id":7,"cmd":16,"data":"BA=="}"#)
+        try await host.send(json: #"{"t":"ping","id":8}"#)
+        let pong = try await host.receiveJSON()
+        XCTAssertEqual(pong["id"] as? Int, 8, "ping answered while the CTAP work is still running")
+
+        var ids = Set<Int>()
+        var response: [String: Any] = [:]
+        while response["t"] as? String != "ctap.response" {
+            response = try await host.receiveJSON() // throws if a nonce arrived out of order
+            if response["t"] as? String == "pong", let id = response["id"] as? Int { ids.insert(id) }
+        }
+        XCTAssertEqual(ids, Set(100..<120))
+        XCTAssertEqual(response["id"] as? Int, 7)
+        XCTAssertEqual(response["data"] as? String, "AKA=")
+
+        host.stream.close()
+        _ = await task.result
+    }
+
     func testUnpairedHostGetsNotPairedAndIsClosed() async throws {
         let (host, task, _) = start(TestRegistry())
         let status = try await host.connect(mode: .session)

@@ -4,13 +4,20 @@ struct ContentView: View {
     @EnvironmentObject private var model: AppModel
 
     var body: some View {
-        Group {
-            if model.deskMode {
-                DeskView(hosts: model.hosts, server: model.server)
-            } else {
-                MainView(hosts: model.hosts, server: model.server)
+        ZStack {
+            Group {
+                if model.deskMode {
+                    DeskView(hosts: model.hosts, server: model.server)
+                } else {
+                    MainView(hosts: model.hosts, server: model.server)
+                }
             }
+            if model.winking {
+                Color.white.opacity(0.9).ignoresSafeArea().transition(.opacity)
+            }
+            FIDOPromptOverlay(prompts: model.fidoPrompts)
         }
+        .animation(.easeInOut(duration: 0.25), value: model.winking)
         .sheet(isPresented: $model.showPairing, onDismiss: { model.proposedInvite = nil }) {
             PairingView(hosts: model.hosts)
                 .environmentObject(model)
@@ -61,6 +68,17 @@ private struct MainView: View {
                     if hosts.hosts.isEmpty {
                         Text("Run `phonekey pair` on the computer and scan the code it shows.")
                     }
+                }
+
+                Section {
+                    NavigationLink {
+                        CredentialsView(store: model.credentials)
+                    } label: {
+                        Label("Passkeys & security keys", systemImage: "key")
+                    }
+                } footer: {
+                    Text("Keys live in the Secure Enclave of this iPhone and are not synced or backed up. "
+                        + "Keep a second way to sign in for every account.")
                 }
 
                 Section {

@@ -281,6 +281,26 @@ func (s *Session) Status(ctx context.Context) (*proto.StatusReport, error) {
 	return &st, json.Unmarshal(m.JSON, &st)
 }
 
+// CTAP sends one CTAPHID command (0x10 CBOR or 0x08 WINK) to the phone's
+// authenticator and returns its answer (status byte + CBOR). It waits as long
+// as ctx allows; the phone gives the user 60 s.
+func (s *Session) CTAP(ctx context.Context, cmd byte, data []byte) ([]byte, error) {
+	c := int(cmd)
+	id, err := s.send(ctx, proto.Request{T: "ctap.request", Cmd: &c, Data: data})
+	if err != nil {
+		return nil, err
+	}
+	m, err := s.await(id)
+	if err != nil {
+		return nil, err
+	}
+	var r proto.CTAPResponse
+	if err := json.Unmarshal(m.JSON, &r); err != nil {
+		return nil, err
+	}
+	return r.Data, nil
+}
+
 // PhotoOptions mirror photo.capture.
 type PhotoOptions struct {
 	Camera       string

@@ -33,6 +33,7 @@ final class PhoneServer: ObservableObject, @unchecked Sendable {
     private let registry: HostRegistry
     private let hello: HelloMessage
     private let handler: PhoneSession.Handler
+    private let onSessionEnd: (PhoneSession) -> Void
     private let queue = DispatchQueue(label: "net.geraldhofbauer.phonekey.server")
     private let log = Logger(subsystem: "net.geraldhofbauer.phonekey", category: "server")
 
@@ -43,11 +44,12 @@ final class PhoneServer: ObservableObject, @unchecked Sendable {
     private var connections: [ObjectIdentifier: NWConnection] = [:]
 
     init(identity: Curve25519.KeyAgreement.PrivateKey, registry: HostRegistry, hello: HelloMessage,
-         handler: @escaping PhoneSession.Handler) {
+         handler: @escaping PhoneSession.Handler, onSessionEnd: @escaping (PhoneSession) -> Void) {
         self.identity = identity
         self.registry = registry
         self.hello = hello
         self.handler = handler
+        self.onSessionEnd = onSessionEnd
     }
 
     func start() {
@@ -123,12 +125,13 @@ final class PhoneServer: ObservableObject, @unchecked Sendable {
                 self?.lastContact = Contact(hostKey: key, date: Date())
             }
         }
-        Task { [hello, handler, log] in
+        Task { [hello, handler, log, onSessionEnd] in
             do {
                 try await session.run(hello: hello, busy: busy, handler: handler)
             } catch {
                 log.info("Connection ended: \(String(describing: error), privacy: .public)")
             }
+            onSessionEnd(session)
             self.queue.async { self.connections[id] = nil }
             DispatchQueue.main.async {
                 if let key = authenticatedKey, let i = self.connectedHosts.firstIndex(of: key) {
