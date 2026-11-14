@@ -188,6 +188,18 @@ final class AuthenticatorTests: XCTestCase {
         XCTAssertEqual(store.items.count, 1)
     }
 
+    func testSilentLookup() async throws {
+        let silent = CBOR.map([.int(1): .text("github.com"), .int(2): .bytes(clientDataHash),
+                               .int(5): .map([.text("up"): .bool(false)])])
+        var (status, _) = await call(0x02, silent)
+        XCTAssertEqual(status, CTAPStatus.noCredentials.rawValue, "lookup without credentials needs no signature")
+        XCTAssertTrue(ui.signIns.isEmpty, "and no prompt")
+        _ = try await register(rk: true)
+        (status, _) = await call(0x02, silent)
+        XCTAssertEqual(status, CTAPStatus.unsupportedOption.rawValue)
+        XCTAssertTrue(ui.signIns.isEmpty)
+    }
+
     func testErrors() async throws {
         var (status, _) = await call(0x01, makeCredentialParams(rk: false, algs: [-8]))
         XCTAssertEqual(status, CTAPStatus.unsupportedAlgorithm.rawValue)
@@ -223,6 +235,29 @@ final class AuthenticatorTests: XCTestCase {
         XCTAssertEqual(status, CTAPStatus.missingParameter.rawValue)
         (status, _) = await call(0x01, .array([]))
         XCTAssertEqual(status, CTAPStatus.cborUnexpectedType.rawValue)
+    }
+
+    func testCredProtectIsStoredAndEchoed() async throws {
+        var params = makeCredentialParams(rk: true)
+        if case var .map(pairs) = params {
+            pairs.append(.init(.int(6), .map([.text("credProtect"): .int(2), .text("hmac-secret"): .bool(true)])))
+            params = .map(pairs)
+        }
+        let (status, body) = await call(0x01, params)
+        XCTAssertEqual(status, 0)
+        let authData = [UInt8](try XCTUnwrap(body?[2]?.bytes))
+        XCTAssertEqual(authData[32], 0xC5, "flags UP|UV|AT|ED")
+        // Extensions follow the COSE key: {"credProtect": 2}, hmac-secret ignored.
+        XCTAssertEqual(Data(authData.suffix(14)), hex("a16b6372656450726f7465637402"))
+        XCTAssertEqual(store.items.first?.credProtect, 2)
+
+        let (info, getInfo) = await call(0x04, nil)
+        XCTAssertEqual(info, 0)
+        XCTAssertEqual(getInfo?[2], .array([.text("credProtect")]))
+
+        // A level-2 passkey is still found without an allow list: Touch ID is always done.
+        let (signIn, _) = await call(0x02, .map([.int(1): .text("github.com"), .int(2): .bytes(clientDataHash)]))
+        XCTAssertEqual(signIn, 0)
     }
 
     func testAuthenticatorSelection() async throws {

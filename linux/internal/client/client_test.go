@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"io"
 	"net"
@@ -107,6 +108,9 @@ func (f *fakePhone) serve(c net.Conn) {
 	}
 	conn.WriteJSON(proto.Hello{T: "hello", Role: "phone", Protocol: 1, AppVersion: "test",
 		Device: &proto.Device{Model: "iPhone9,3", System: "iOS 15.8", Name: "Test iPhone"}})
+	// ctap.request waits for the "user" until ctap.cancel arrives, unless it
+	// is a getInfo (0x04), which answers at once.
+	pending := map[uint64]bool{}
 	for {
 		m, err := conn.Read()
 		if err != nil {
@@ -120,6 +124,19 @@ func (f *fakePhone) serve(c net.Conn) {
 			lvl := 0.5
 			conn.WriteJSON(proto.StatusReport{T: "status", ID: *m.ID, Thermal: "nominal",
 				Battery: proto.Battery{Level: &lvl, State: "charging"}})
+		case "ctap.request":
+			var req proto.Request
+			json.Unmarshal(m.JSON, &req)
+			if len(req.Data) > 0 && req.Data[0] == 0x04 {
+				conn.WriteJSON(proto.CTAPResponse{T: "ctap.response", ID: req.ID, Data: []byte{0x00, 0xA0}})
+			} else {
+				pending[req.ID] = true
+			}
+		case "ctap.cancel":
+			if pending[*m.ID] {
+				delete(pending, *m.ID)
+				conn.WriteJSON(proto.CTAPResponse{T: "ctap.response", ID: *m.ID, Data: []byte{0x2D}})
+			}
 		case "photo.capture":
 			conn.WriteJSON(proto.PhotoBegin{T: "photo.begin", ID: *m.ID, Stream: 1, Size: len(f.photo), MIME: "image/jpeg"})
 			for off := 0; off < len(f.photo); off += proto.MaxChunkData {
@@ -244,5 +261,38 @@ func TestCorruptPhotoIsRejected(t *testing.T) {
 	defer s.Close()
 	if _, err := s.Photo(ctx, PhotoOptions{}); err == nil {
 		t.Fatal("corrupt photo accepted")
+	}
+}
+
+func TestMuxCTAPAndCancel(t *testing.T) {
+	f := newFakePhone(t)
+	c := newClient(t, f)
+	hostKey, _ := c.Store.HostKey()
+	psk := make([]byte, 32)
+	rand.Read(psk)
+	f.setPending(psk, hostKey.Public)
+	s, err := c.Pair(context.Background(), psk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mux := s.Mux()
+	defer mux.Close()
+
+	resp, err := mux.CTAP(context.Background(), []byte{0x04})
+	if err != nil || !bytes.Equal(resp, []byte{0x00, 0xA0}) {
+		t.Fatalf("getInfo: %x %v", resp, err)
+	}
+
+	// The browser cancels while the phone waits for the user.
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	resp, err = mux.CTAP(ctx, []byte{0x02, 0xA0})
+	if err != nil || !bytes.Equal(resp, []byte{0x2D}) {
+		t.Fatalf("after cancel: %x %v", resp, err)
+	}
+
+	// Ping still works on the same mux afterwards.
+	if _, err := mux.Request(context.Background(), proto.Request{T: "ping"}); err != nil {
+		t.Fatal(err)
 	}
 }

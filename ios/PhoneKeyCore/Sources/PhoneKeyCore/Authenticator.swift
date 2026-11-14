@@ -38,9 +38,12 @@ public struct StoredCredential: Codable, Equatable, Identifiable {
     public var discoverable: Bool
     public var created: Date
     public var signCount: UInt32
+    /// credProtect level 1–3, if the platform asked for one.
+    public var credProtect: Int?
 
     public init(id: Data, rpId: String, rpName: String?, userId: Data, userName: String?,
-                userDisplayName: String?, discoverable: Bool, created: Date, signCount: UInt32) {
+                userDisplayName: String?, discoverable: Bool, created: Date, signCount: UInt32,
+                credProtect: Int? = nil) {
         self.id = id
         self.rpId = rpId
         self.rpName = rpName
@@ -50,6 +53,7 @@ public struct StoredCredential: Codable, Equatable, Identifiable {
         self.discoverable = discoverable
         self.created = created
         self.signCount = signCount
+        self.credProtect = credProtect
     }
 
     /// The best label for the account.
@@ -184,6 +188,7 @@ public final class Authenticator {
     func getInfo() -> CBOR {
         .map([
             .int(1): .array([.text("FIDO_2_0")]),
+            .int(2): .array([.text("credProtect")]),
             .int(3): .bytes(Self.aaguid),
             .int(4): .map([.text("rk"): .bool(true), .text("up"): .bool(true),
                            .text("uv"): .bool(true), .text("plat"): .bool(false)]),
@@ -205,6 +210,9 @@ public final class Authenticator {
         let options = p[7]
         if options?["up"]?.bool == false { throw CTAPStatus.invalidOption }
         let passkey = options?["rk"]?.bool ?? false
+        // credProtect: every use needs Touch ID anyway, so all levels hold;
+        // the level is stored and echoed. Other extensions are ignored.
+        let credProtect = p[6]?["credProtect"]?.int.flatMap { (1...3).contains($0) ? $0 : nil }
 
         if let pinAuth = p[8] {
             guard pinAuth.bytes?.isEmpty == true else { throw CTAPStatus.pinAuthInvalid }
@@ -240,15 +248,18 @@ public final class Authenticator {
         try store.save(StoredCredential(
             id: credentialId, rpId: rpId, rpName: rp["name"]?.text, userId: userId,
             userName: user["name"]?.text, userDisplayName: user["displayName"]?.text,
-            discoverable: passkey, created: Date(), signCount: 0))
+            discoverable: passkey, created: Date(), signCount: 0, credProtect: credProtect))
 
         var authData = Self.rpIdHash(rpId)
-        authData.append(Flags.up | Flags.uv | Flags.at)
+        authData.append(Flags.up | Flags.uv | Flags.at | (credProtect != nil ? Flags.ed : 0))
         authData += Self.counterBytes(0)
         authData += Self.aaguid
         authData += [UInt8(credentialId.count >> 8), UInt8(credentialId.count & 0xFF)]
         authData += credentialId
         authData += Self.coseKey(x963: publicKey).encoded
+        if let credProtect {
+            authData += CBOR.map([.text("credProtect"): .int(credProtect)]).encoded
+        }
         _ = clientDataHash // not signed with attestation "none"
 
         return .map([
@@ -264,7 +275,6 @@ public final class Authenticator {
         let rpId = try required(p[1]?.text)
         let clientDataHash = try required(p[2]?.bytes)
         if p[6] != nil { throw CTAPStatus.pinAuthInvalid }
-        if p[5]?["up"]?.bool == false { throw CTAPStatus.unsupportedOption }
 
         let allowList = (p[3]?.array ?? []).compactMap { $0["id"]?.bytes }
         let candidates: [StoredCredential]
@@ -274,6 +284,10 @@ public final class Authenticator {
             candidates = allowList.compactMap { store.credential(id: $0) }.filter { $0.rpId == rpId }
         }
         guard !candidates.isEmpty else { throw CTAPStatus.noCredentials }
+        // A silent check (up = false) for existing credentials, as OpenSSH does
+        // before enrolling a resident key, is answered above. A silent
+        // signature is impossible: the key needs Touch ID.
+        if p[5]?["up"]?.bool == false { throw CTAPStatus.unsupportedOption }
 
         let (decision, chosen) = await ui.chooseCredential(SignInPrompt(rpId: rpId, candidates: candidates))
         try check(decision)
@@ -309,6 +323,7 @@ public final class Authenticator {
         static let up: UInt8 = 0x01
         static let uv: UInt8 = 0x04
         static let at: UInt8 = 0x40
+        static let ed: UInt8 = 0x80
     }
 
     private func required<T>(_ value: T?) throws -> T {

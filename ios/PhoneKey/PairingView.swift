@@ -65,8 +65,8 @@ struct PairingView: View {
                 }
                 Button("Cancel", role: .cancel) {}
             } message: { _ in
-                Text("Only pair computers you control. A paired computer can ask PhoneKey for its status "
-                    + "and, if you allow it, take photos.")
+                Text("Only pair computers you control. A paired computer can use PhoneKey as a security key "
+                    + "(you confirm every use with Touch ID), ask for its status and, if you allow it, take photos.")
             }
         }
         .onAppear {

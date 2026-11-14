@@ -314,6 +314,7 @@ CTAP 2.0 (FIDO Alliance, "Client to Authenticator Protocol", Proposed Standard
 | Key | Value |
 |---|---|
 | 1 versions | `["FIDO_2_0"]` |
+| 2 extensions | `["credProtect"]` |
 | 3 aaguid | `4e3b1fe3-c75c-4055-b791-c999ff915951` |
 | 4 options | `{"rk": true, "up": true, "uv": true, "plat": false}` (no `clientPin`) |
 | 5 maxMsgSize | 1200 |
@@ -338,6 +339,10 @@ CTAP 2.0 (FIDO Alliance, "Client to Authenticator Protocol", Proposed Standard
   key on the phone and carries no key material.
 - Attestation format `none` with an empty `attStmt`. Flags `UP | UV | AT`
   (`0x45`), counter 0.
+- `credProtect` (levels 1–3) is stored with the credential and returned in the
+  authenticator data extensions (flag `ED`, `0xC5` in total). Every use needs
+  Touch ID, so all levels are always satisfied. OpenSSH requires this extension
+  for resident and `verify-required` keys. Other extensions are ignored.
 - Every credential is stored on the phone, discoverable or not.
 
 ### authenticatorGetAssertion (`0x02`)
@@ -345,8 +350,11 @@ CTAP 2.0 (FIDO Alliance, "Client to Authenticator Protocol", Proposed Standard
 - Candidates: the stored credentials in `allowList` for `rpId`, or without
   `allowList` all discoverable credentials for `rpId`. None: `0x2E`
   (`CTAP2_ERR_NO_CREDENTIALS`).
-- `options.up = false`: `0x2B` (`CTAP2_ERR_UNSUPPORTED_OPTION`). A Secure
-  Enclave key cannot sign without Touch ID.
+- Candidates are looked up first, so a silent lookup (`options.up = false`)
+  without matching credentials answers `0x2E` without any prompt (OpenSSH does
+  this before enrolling a resident key). With matching credentials `up = false`
+  answers `0x2B` (`CTAP2_ERR_UNSUPPORTED_OPTION`): a Secure Enclave key cannot
+  sign without Touch ID.
 - Several discoverable candidates: the phone lets the user pick one (it has a
   display), so the response never sets `numberOfCredentials` and
   `authenticatorGetNextAssertion` (`0x08`) answers `0x30`

@@ -28,6 +28,7 @@ const (
 	FlagUP byte = 0x01
 	FlagUV byte = 0x04
 	FlagAT byte = 0x40
+	FlagED byte = 0x80
 )
 
 var enc, _ = cbor.CTAP2EncOptions().EncMode()
@@ -150,6 +151,7 @@ type AuthData struct {
 	AAGUID       []byte           // with FlagAT
 	CredentialID []byte           // with FlagAT
 	PublicKey    *ecdsa.PublicKey // with FlagAT
+	Extensions   map[string]any   // with FlagED
 }
 
 // ParseAuthData reads authenticator data, including attested credential data.
@@ -187,8 +189,13 @@ func ParseAuthData(b []byte) (*AuthData, error) {
 	if err != nil {
 		return nil, fmt.Errorf("COSE key: %w", err)
 	}
+	if a.Flags&FlagED != 0 {
+		if rem, err = dec.UnmarshalFirst(rem, &a.Extensions); err != nil {
+			return nil, fmt.Errorf("extensions: %w", err)
+		}
+	}
 	if len(rem) != 0 {
-		return nil, errors.New("extensions are not expected")
+		return nil, errors.New("unexpected bytes after authenticator data")
 	}
 	if key.Kty != 2 || key.Alg != -7 || key.Crv != 1 || len(key.X) != 32 || len(key.Y) != 32 {
 		return nil, fmt.Errorf("not an ES256 P-256 key (kty %d alg %d crv %d)", key.Kty, key.Alg, key.Crv)
