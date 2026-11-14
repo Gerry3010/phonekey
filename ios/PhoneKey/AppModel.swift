@@ -219,7 +219,7 @@ final class AppModel: ObservableObject {
         }
         let quality = min(max(request.quality ?? 0.8, 0.1), 1.0)
 
-        let stream: UInt32 = try await MainActor.run {
+        let (stream, upsideDown): (UInt32, Bool) = try await MainActor.run {
             guard photosAllowed else {
                 throw ErrorMessage(id: id, code: .cameraDisabled, message: "Photos are switched off in PhoneKey.")
             }
@@ -231,11 +231,14 @@ final class AppModel: ObservableObject {
             }
             capturing = true
             defer { nextStream &+= 1 }
-            return nextStream
+            // The photo comes out the way up the phone stands.
+            let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene
+            return (nextStream, scene?.interfaceOrientation == .portraitUpsideDown)
         }
         let result: CameraService.Photo
         do {
-            result = try await camera.capture(position: position, maxDimension: maxDimension, quality: quality)
+            result = try await camera.capture(position: position, upsideDown: upsideDown,
+                                              maxDimension: maxDimension, quality: quality)
             await MainActor.run { capturing = false }
         } catch {
             await MainActor.run { capturing = false }

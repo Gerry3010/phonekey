@@ -31,15 +31,20 @@ final class CameraService: @unchecked Sendable {
         #endif
     }
 
-    func capture(position: AVCaptureDevice.Position, maxDimension: Int, quality: Double) async throws -> Photo {
+    /// `upsideDown`: the phone stands in portrait upside down; the photo is
+    /// turned so it still comes out upright.
+    func capture(position: AVCaptureDevice.Position, upsideDown: Bool,
+                 maxDimension: Int, quality: Double) async throws -> Photo {
         #if targetEnvironment(simulator)
-        return try Self.process(Self.simulatorImage(position: position), maxDimension: maxDimension, quality: quality)
+        let image = Self.simulatorImage(position: position, upsideDown: upsideDown)
+        return try Self.process(image, maxDimension: maxDimension, quality: quality)
         #else
         let jpeg: Data = try await withCheckedThrowingContinuation { continuation in
             queue.async {
                 guard self.inFlight == nil else { return continuation.resume(throwing: CaptureError.busy) }
                 do {
-                    let delegate = try CaptureDelegate(position: position) { result in
+                    let orientation: AVCaptureVideoOrientation = upsideDown ? .portraitUpsideDown : .portrait
+                    let delegate = try CaptureDelegate(position: position, orientation: orientation) { result in
                         // AVFoundation calls back on its own queue.
                         self.queue.async {
                             self.inFlight = nil
@@ -86,7 +91,7 @@ final class CameraService: @unchecked Sendable {
 
     #if targetEnvironment(simulator)
     /// A test picture, so the whole photo path can be exercised without a camera.
-    private static func simulatorImage(position: AVCaptureDevice.Position) -> Data {
+    private static func simulatorImage(position: AVCaptureDevice.Position, upsideDown: Bool) -> Data {
         let size = CGSize(width: 1200, height: 1600)
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1
@@ -94,7 +99,8 @@ final class CameraService: @unchecked Sendable {
             let colors = [UIColor.systemTeal.cgColor, UIColor.systemIndigo.cgColor] as CFArray
             let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: colors, locations: nil)!
             ctx.cgContext.drawLinearGradient(gradient, start: .zero, end: CGPoint(x: size.width, y: size.height), options: [])
-            let text = "PhoneKey Simulator\n\(position == .front ? "front" : "back") camera\n\(Date())"
+            let way = upsideDown ? "upside down" : "portrait"
+            let text = "PhoneKey Simulator\n\(position == .front ? "front" : "back") camera, \(way)\n\(Date())"
             let style = NSMutableParagraphStyle()
             style.alignment = .center
             (text as NSString).draw(in: CGRect(x: 60, y: 650, width: size.width - 120, height: 400), withAttributes: [
@@ -112,7 +118,8 @@ private final class CaptureDelegate: NSObject, AVCapturePhotoCaptureDelegate {
     private let output = AVCapturePhotoOutput()
     private let completion: (Result<Data, Error>) -> Void
 
-    init(position: AVCaptureDevice.Position, completion: @escaping (Result<Data, Error>) -> Void) throws {
+    init(position: AVCaptureDevice.Position, orientation: AVCaptureVideoOrientation,
+         completion: @escaping (Result<Data, Error>) -> Void) throws {
         self.completion = completion
         super.init()
         guard let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: position),
@@ -127,7 +134,7 @@ private final class CaptureDelegate: NSObject, AVCapturePhotoCaptureDelegate {
         session.addInput(input)
         session.addOutput(output)
         session.commitConfiguration()
-        output.connection(with: .video)?.videoOrientation = .portrait
+        output.connection(with: .video)?.videoOrientation = orientation
     }
 
     func start(on queue: DispatchQueue) {
