@@ -89,12 +89,15 @@ func fidoSelftest(ctx context.Context, args []string) error {
 	fmt.Printf("getInfo: %v, AAGUID %x\n", info.Versions, info.AAGUID)
 
 	userID := random(16)
+	// Every run gets its own account name: test passkeys from earlier runs stay
+	// on the phone, and step 2 asks the user to pick one of them.
+	label := "Self-test " + time.Now().Format("2006-01-02 15:04:05")
 	fmt.Printf("\n1/3 Register a passkey for %s: confirm on the phone, then Touch ID.\n", *rpID)
 	var mc ctap.MakeCredentialResponse
 	err = ctap.Call(call, ctap.CmdMakeCredential, ctap.MakeCredentialRequest{
 		ClientDataHash: random(32),
 		RP:             ctap.RP{ID: *rpID, Name: "PhoneKey self-test"},
-		User:           ctap.User{ID: userID, Name: "selftest", DisplayName: "Self-test"},
+		User:           ctap.User{ID: userID, Name: label, DisplayName: label},
 		Params:         []ctap.CredParam{{Alg: -7, Type: "public-key"}},
 		Options:        map[string]bool{"rk": true},
 	}, &mc)
@@ -122,20 +125,23 @@ func fidoSelftest(ctx context.Context, args []string) error {
 		}
 	}
 
-	fmt.Println("\n2/3 Sign in with the passkey (no allow list): pick the account, then Touch ID.")
+	fmt.Printf("\n2/3 Sign in with the passkey (no allow list): pick %q, then Touch ID.\n", label)
 	cdh := random(32)
 	var ga ctap.GetAssertionResponse
 	if err := ctap.Call(call, ctap.CmdGetAssertion, ctap.GetAssertionRequest{RPID: *rpID, ClientDataHash: cdh}, &ga); err != nil {
 		return err
 	}
+	// Compare the credential first: a passkey from an earlier run would fail
+	// the signature check against this run's key, which reads like a bug.
+	if !bytes.Equal(ga.Credential.ID, reg.CredentialID) {
+		return fmt.Errorf("FAIL: the phone signed with another %s passkey, not %q. Pick that one, or delete old test passkeys in PhoneKey → Passkeys & security keys", *rpID, label)
+	}
+	fmt.Println("  ok: same credential")
 	a1, err := ctap.VerifyAssertion(reg.PublicKey, *rpID, cdh, &ga)
 	if err != nil {
 		return errors.New("FAIL: " + err.Error())
 	}
 	if err := check(true, "signature, rpIdHash, UP and UV"); err != nil {
-		return err
-	}
-	if err := check(bytes.Equal(ga.Credential.ID, reg.CredentialID), "same credential"); err != nil {
 		return err
 	}
 	if err := check(ga.User != nil && bytes.Equal(ga.User.ID, userID), "user handle returned"); err != nil {
