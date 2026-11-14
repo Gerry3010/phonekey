@@ -2,8 +2,12 @@
 import PhoneKeyCore
 import SwiftUI
 
-/// The authenticator's screen: one prompt at a time, answered by a tap (and
-/// Touch ID for registrations), timing out after 60 s.
+/// The authenticator's screen: one prompt at a time, timing out after 60 s.
+///
+/// Registrations and sign-ins open Touch ID right away. Cancelling Touch ID
+/// does not decline: the card stays with the details and offers Touch ID again.
+/// Only the Decline button declines. With several accounts the user picks one
+/// first, then Touch ID opens.
 @MainActor
 final class FIDOPrompts: ObservableObject {
     enum Kind {
@@ -23,12 +27,18 @@ final class FIDOPrompts: ObservableObject {
     static let timeout: TimeInterval = 60
 
     @Published private(set) var active: Active?
-    /// Shown on the card while Touch ID runs or after it failed.
+    /// Shown on the card after Touch ID was cancelled or failed.
     @Published private(set) var note: String?
+    /// The Touch ID sheet is up.
+    @Published private(set) var authenticating = false
+    /// The sign-in account Touch ID is for: picked by the user, or the only one.
+    @Published private(set) var chosen: StoredCredential?
     /// The computer the current CTAP request came from.
     var hostName: String?
     /// Told when a prompt appears (true) or goes away (false).
     var onActiveChange: ((Bool) -> Void)?
+    /// Carries the Touch ID of an approved sign-in to the signature.
+    var handoff: TouchIDHandoff?
 
     private var nextId = 0
     private var continuation: CheckedContinuation<(UserDecision, StoredCredential?), Never>?
@@ -38,29 +48,52 @@ final class FIDOPrompts: ObservableObject {
 
     // MARK: User actions
 
-    func approveRegistration() {
-        guard case let .registration(prompt) = active?.kind else { return }
+    /// Opens Touch ID for the current registration or chosen sign-in account.
+    func authenticate() {
+        guard let active, !authenticating else { return }
+        let reason: String
+        switch active.kind {
+        case let .registration(prompt):
+            reason = prompt.passkey ? "Create a passkey for \(prompt.rpId)" : "Register this key with \(prompt.rpId)"
+        case let .signIn(prompt):
+            guard let chosen else { return }
+            reason = "Sign in to \(prompt.rpId) as \(chosen.accountLabel)"
+        case .excluded, .selection:
+            return
+        }
+
         let context = LAContext()
+        context.localizedCancelTitle = "Details"
+        context.localizedFallbackTitle = "" // no passcode fallback: the keys need Touch ID
         authContext = context
+        authenticating = true
         note = nil
-        let what = prompt.passkey ? "create a passkey for" : "register this key with"
-        context.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics,
-                               localizedReason: "Touch ID to \(what) \(prompt.rpId)") { ok, error in
+        context.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, localizedReason: reason) { ok, error in
             Task { @MainActor in
-                guard self.authContext === context else { return }
+                guard self.authContext === context, self.active?.id == active.id else { return }
+                self.authenticating = false
                 if ok {
-                    self.finish(.approved, nil)
+                    self.approve(with: context)
                 } else {
-                    self.note = (error as? LAError)?.code == .biometryNotEnrolled
-                        ? "Set up Touch ID in Settings first."
-                        : "Touch ID did not succeed."
+                    self.authContext = nil
+                    self.touchIDDidNotSucceed(error as? LAError)
                 }
             }
         }
     }
 
+    /// Sign-in with several accounts: picks one and opens Touch ID.
     func choose(_ credential: StoredCredential) {
-        finish(.approved, credential)
+        guard case .signIn = active?.kind, !authenticating else { return }
+        chosen = credential
+        authenticate()
+    }
+
+    /// Sign-in with several accounts: back to the list.
+    func chooseAnotherAccount() {
+        guard case let .signIn(prompt) = active?.kind, prompt.candidates.count > 1, !authenticating else { return }
+        chosen = nil
+        note = nil
     }
 
     func acknowledge() {
@@ -69,6 +102,35 @@ final class FIDOPrompts: ObservableObject {
 
     func decline() {
         finish(.denied, nil)
+    }
+
+    private func approve(with context: LAContext) {
+        guard let active else { return }
+        switch active.kind {
+        case .registration:
+            finish(.approved, nil)
+        case .signIn:
+            // The signature reuses this Touch ID instead of asking again.
+            authContext = nil
+            handoff?.put(context)
+            finish(.approved, chosen)
+        case .excluded, .selection:
+            finish(.approved, nil)
+        }
+    }
+
+    private func touchIDDidNotSucceed(_ error: LAError?) {
+        switch error?.code {
+        case .biometryNotEnrolled, .biometryNotAvailable:
+            note = "Set up Touch ID in Settings first."
+        case .biometryLockout:
+            note = "Touch ID is locked. Unlock the iPhone with its passcode, then try again."
+        case .authenticationFailed:
+            note = "Touch ID did not recognise the finger."
+        default:
+            // Cancelled (or interrupted by the system): the request stays open.
+            note = nil
+        }
     }
 
     // MARK: Presenting (called from the authenticator's task)
@@ -99,8 +161,15 @@ final class FIDOPrompts: ObservableObject {
             continuation.resume(returning: (.denied, nil))
             return
         }
+        // A Touch ID from an earlier prompt must never sign for this one.
+        handoff?.clear()
         self.continuation = continuation
         note = nil
+        authenticating = false
+        chosen = nil
+        if case let .signIn(prompt) = kind, prompt.candidates.count == 1 {
+            chosen = prompt.candidates.first
+        }
         active = Active(id: id, kind: kind, hostName: hostName, deadline: Date().addingTimeInterval(Self.timeout))
         onActiveChange?(true)
         UINotificationFeedbackGenerator().notificationOccurred(.warning)
@@ -109,6 +178,14 @@ final class FIDOPrompts: ObservableObject {
             guard !Task.isCancelled, self?.active?.id == id else { return }
             self?.finish(.timedOut, nil)
         }
+        switch kind {
+        case .registration:
+            authenticate()
+        case .signIn where chosen != nil:
+            authenticate()
+        default:
+            break
+        }
     }
 
     private func finish(_ decision: UserDecision, _ credential: StoredCredential?) {
@@ -116,7 +193,9 @@ final class FIDOPrompts: ObservableObject {
         timeoutTask = nil
         authContext?.invalidate()
         authContext = nil
+        authenticating = false
         note = nil
+        chosen = nil
         active = nil
         onActiveChange?(false)
         continuation?.resume(returning: (decision, credential))
@@ -139,5 +218,45 @@ extension FIDOPrompts: AuthenticatorUI {
 
     nonisolated func confirmSelection() async -> UserDecision {
         await present(.selection).0
+    }
+}
+
+/// Hands the Touch ID that approved a sign-in on the card to the signature that
+/// follows, so the user sees Touch ID once. Each prompt clears it first, and it
+/// expires after a few seconds, so it can never sign for another request.
+final class TouchIDHandoff: @unchecked Sendable {
+    private static let lifetime: TimeInterval = 10
+
+    private let lock = NSLock()
+    private var context: LAContext?
+    private var since = Date.distantPast
+
+    func put(_ context: LAContext) {
+        lock.lock()
+        defer { lock.unlock() }
+        self.context?.invalidate()
+        self.context = context
+        since = Date()
+    }
+
+    func clear() {
+        lock.lock()
+        defer { lock.unlock() }
+        context?.invalidate()
+        context = nil
+    }
+
+    /// The approved context, once; nil if there is none or it is too old.
+    func take() -> LAContext? {
+        lock.lock()
+        defer { lock.unlock() }
+        let taken = context
+        context = nil
+        guard let taken else { return nil }
+        guard Date().timeIntervalSince(since) < Self.lifetime else {
+            taken.invalidate()
+            return nil
+        }
+        return taken
     }
 }
