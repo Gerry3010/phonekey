@@ -15,6 +15,9 @@ Das Zielgerät ist ein **iPhone 7 mit höchstens iOS 15.8**, das Deployment Targ
   laufen auf iOS 17+. Ob etwas auf iOS 15 funktioniert, zeigt nur das echte Gerät.
 - Die App läuft **nur im Vordergrund** (Desk-Station mit Guided Access). Im Hintergrund stoppt die
   Kamera, Sockets brechen ab und Touch ID fragt nicht. Nichts bauen, das Hintergrundbetrieb braucht.
+- Hochformat in **beiden Richtungen** (Kabel oben). Deshalb UIKit-App- und Scene-Delegate mit eigenem
+  `UIHostingController` (`PhoneKeyApp.swift`), kein SwiftUI-`App`: dessen Root-Controller sperrt auf
+  iOS 15 Upside-down, egal was in der Info.plist steht.
 
 ## Arbeitsteilung
 
