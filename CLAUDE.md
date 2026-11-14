@@ -81,5 +81,19 @@ Beispiel per AppleScript (`run destinations … whose name contains "iPhone 7"`,
 Start muss das iPhone online sein, damit iOS das Entwicklerzertifikat prüft (Einstellungen → Allgemein
 → VPN & Geräteverwaltung → App überprüfen). Danach geht es offline. Das Entwicklerprofil gilt ein Jahr.
 
+**FIDO testen:**
+- `phonekey fido selftest` registriert einen Test-Passkey (`phonekey.test`), meldet sich zweimal an
+  und prüft alles hostseitig. Läuft auch auf macOS, gegen Simulator (`-connect tcp:…`) oder iPhone.
+- Touch ID im Simulator: einmal anlernen mit
+  `xcrun simctl spawn <udid> notifyutil -s com.apple.BiometricKit.enrollmentChanged 1` und
+  `… notifyutil -p com.apple.BiometricKit.enrollmentChanged`, Finger passt mit
+  `… notifyutil -p com.apple.BiometricKit_Sim.fingerTouch.match`. Simulator-Taps brauchen
+  `duration: 0.1`.
+- `/dev/uhid`, libfido2 und `ssh-keygen -t ecdsa-sk` in einer Lima-VM (`limactl start
+  template://ubuntu-lts`). Die VM erreicht die App im Simulator über `host.lima.internal:20555`.
+  Einrichtung wie in `linux/README.md`.
+- Der Simulator hat keinen Secure Enclave; dort entsteht der Schlüssel als normaler
+  Keychain-Schlüssel mit derselben Touch-ID-Regel. Nur das echte iPhone prüft den Secure Enclave.
+
 **Vektoren:** Nach jeder Protokolländerung `go run ./cmd/gen-vectors ../docs/protocol-vectors.json`
 in `linux/`. Go und Swift prüfen beide gegen diese Datei.

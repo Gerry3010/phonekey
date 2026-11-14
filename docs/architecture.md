@@ -66,7 +66,7 @@ The exact format is in [protocol.md](protocol.md).
 
 0. **Project init.** Repo, Xcode project, docs. *(done)*
 1. **Transport and desk mode.** usbmuxd TCP channel, encrypted session, QR pairing, desk mode, photo tool as the first end-to-end feature. Protocol spec for the daemon. *(done; verified on an iPhone 7 with iOS 15.8.2)*
-2. **FIDO2 security key and passkeys.** The phone is a full CTAP2 authenticator: discoverable credentials, user verification via Touch ID (any enrolled finger), ES256 keys in the Secure Enclave, attestation "none". The host tunnels CTAPHID through a virtual `/dev/uhid` device that exists only while the phone is connected.
+2. **FIDO2 security key and passkeys.** The phone is a full CTAP2 authenticator: discoverable credentials, user verification via Touch ID (any enrolled finger), ES256 keys in the Secure Enclave, attestation "none", `credProtect`. The host tunnels CTAPHID through a virtual `/dev/uhid` device that exists only while the phone is connected. *(done; verified with libfido2 and OpenSSH in a VM and on the iPhone 7; browser test on real Linux open)*
 3. **More FIDO.** Credential management (`ssh-keygen -K`, browser key lists), `hmac-secret` (LUKS via `systemd-cryptenroll`), U2F/CTAP1.
 4. **Streaming and voice.** Webcam and microphone streams.
 5. **macOS host (optional).** Needs a DriverKit virtual HID device and an entitlement from Apple.

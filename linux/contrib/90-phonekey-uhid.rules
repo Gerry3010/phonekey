@@ -1,0 +1,3 @@
+# Lets members of the "uhid" group create virtual HID devices, which
+# `phonekey fido run` needs. Install to /etc/udev/rules.d/.
+KERNEL=="uhid", SUBSYSTEM=="misc", GROUP="uhid", MODE="0660"

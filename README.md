@@ -23,17 +23,25 @@ and daemon is [docs/protocol.md](docs/protocol.md).
 
 ## Status
 
-**Phase 1:** encrypted USB session, QR pairing, status and photos. Verified end
-to end on an iPhone 7 with iOS 15.8.2 over USB, from the `phonekey` CLI on macOS.
-Not yet tried on a Linux host (only cross-compiled). No security key yet; that is
-Phase 2. The roadmap is in [docs/architecture.md](docs/architecture.md#roadmap).
+- **Phase 1:** encrypted USB session, QR pairing, status, photos, desk mode.
+  Verified on an iPhone 7 with iOS 15.8.2 over USB.
+- **Phase 2:** FIDO2 security key and passkeys. The phone is the authenticator
+  (Secure Enclave, Touch ID per use); `phonekey fido run` exposes it on Linux as
+  a USB security key. Verified in an Ubuntu VM with libfido2 and OpenSSH
+  (`ssh-keygen -t ecdsa-sk`, resident and `verify-required`), and on the iPhone 7
+  with real Touch ID through `phonekey fido selftest`. Not yet tried in a browser
+  on real Linux hardware.
+
+The roadmap is in [docs/architecture.md](docs/architecture.md#roadmap).
 
 ```bash
 cd linux && go build ./cmd/phonekey
 ./phonekey pair            # scan the QR code with PhoneKey → Pair new computer
 ./phonekey status
-./phonekey photo -o desk.jpg   # after "Allow photos" in the app
+./phonekey fido run        # Linux: USB security key while the phone is connected
 ```
+
+Setup for the security key: [linux/README.md](linux/README.md#security-key-fido2-and-passkeys).
 
 ## Layout
 
