@@ -2,13 +2,11 @@
 
 ## Goal
 
-Reuse an iPhone 7 as a peripheral for a Linux machine, and for a coding agent
-running on it:
+Reuse an iPhone 7 as a peripheral for a Linux machine:
 
-- a FIDO2 security key whose keys live in the Secure Enclave and sign only after Touch ID,
+- a FIDO2 security key and passkey store whose keys live in the Secure Enclave and sign only after Touch ID,
 - a camera (webcam stream or single photos),
-- a microphone (audio stream or recordings),
-- an approval button: the agent asks, the human confirms with Touch ID, the phone signs the answer.
+- a microphone (audio stream or recordings).
 
 ## Desk station
 
@@ -29,7 +27,7 @@ iPhone 7 (iOS 15, app)                       Linux (daemon)
  FIDO2 authenticator (Secure Enclave) ┐      ┌ /dev/uhid    → virtual security key
  camera                               │      ├ v4l2loopback → webcam
  microphone                           ├ USB ─┤ PipeWire     → microphone
- approvals (Touch ID, signed)         │usbmux├ MCP server   → tools for coding agents
+ status, photos                       │usbmux├ phonekey CLI → status, photos
  desk mode                            ┘      └ (Wi-Fi fallback via Bonjour, later)
 ```
 
@@ -47,8 +45,7 @@ The exact format is in [protocol.md](protocol.md).
 | Area | iOS app | Linux daemon |
 |---|---|---|
 | Session | TCP listener, handshake, pairing UI | usbmuxd client, handshake, QR display |
-| Security key | CTAP2 + U2F authenticator, ES256 keys in the Secure Enclave, Touch ID per signature | CTAPHID over `/dev/uhid`, so browsers, `ssh-keygen -t ecdsa-sk`, `pam-u2f` and `systemd-cryptenroll` see a normal key |
-| Approvals | shows the request, Touch ID, signs the answer | hook endpoint for the coding agent, signature check |
+| Security key | CTAP2 authenticator (U2F later), ES256 keys in the Secure Enclave, Touch ID per signature, shows the site before signing | CTAPHID over `/dev/uhid`, so browsers, `ssh-keygen -t ecdsa-sk` and `pam-u2f` see a normal key |
 | Camera | `AVCaptureSession`, H.264 (VideoToolbox) or JPEG | `v4l2loopback` device, photo tool |
 | Microphone | `AVAudioEngine` | PipeWire source, recording tool |
 
@@ -68,8 +65,10 @@ The exact format is in [protocol.md](protocol.md).
 ## Roadmap
 
 0. **Project init.** Repo, Xcode project, docs. *(done)*
-1. **Transport and desk mode.** usbmuxd TCP channel, encrypted session, QR pairing, desk mode, photo tool as the first end-to-end feature. Protocol spec for the daemon.
-2. **Approval button.** Request, Touch ID, answer signed with a Secure Enclave key.
-3. **FIDO2 security key.** CTAP2 and U2F, ES256, Touch ID per signature; daemon side over `/dev/uhid`.
-4. **Streaming and voice.** Webcam and microphone streams, text-to-speech, push-to-talk.
+1. **Transport and desk mode.** usbmuxd TCP channel, encrypted session, QR pairing, desk mode, photo tool as the first end-to-end feature. Protocol spec for the daemon. *(done; verified on an iPhone 7 with iOS 15.8.2)*
+2. **FIDO2 security key and passkeys.** The phone is a full CTAP2 authenticator: discoverable credentials, user verification via Touch ID (any enrolled finger), ES256 keys in the Secure Enclave, attestation "none". The host tunnels CTAPHID through a virtual `/dev/uhid` device that exists only while the phone is connected.
+3. **More FIDO.** Credential management (`ssh-keygen -K`, browser key lists), `hmac-secret` (LUKS via `systemd-cryptenroll`), U2F/CTAP1.
+4. **Streaming and voice.** Webcam and microphone streams.
 5. **macOS host (optional).** Needs a DriverKit virtual HID device and an entitlement from Apple.
+
+An approval button for coding agents was considered and dropped: Touch ID is only used for the security key.

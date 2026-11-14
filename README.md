@@ -1,8 +1,7 @@
 # phonekey
 
 Turn an old iPhone into a desk peripheral for a Linux machine: a Touch-ID-gated
-FIDO2 security key, a camera, a microphone and an approval button for AI coding
-agents.
+FIDO2 security key and passkey store, a camera and a microphone.
 
 > **Experimental.** Do not use phonekey as your only security key. Always keep a
 > second key or a recovery method for every account you protect with it.
@@ -18,22 +17,31 @@ phone offers into ordinary Linux devices:
 | FIDO2 authenticator, keys in the Secure Enclave, Touch ID per signature | virtual USB security key via `/dev/uhid` (browsers, `ssh`, `pam-u2f`) |
 | Camera | webcam via `v4l2loopback`, or single photos on request |
 | Microphone | PipeWire source, or recordings on request |
-| Touch ID approval | signed yes/no for risky actions of a coding agent |
 
 More in [docs/architecture.md](docs/architecture.md). The contract between phone
 and daemon is [docs/protocol.md](docs/protocol.md).
 
 ## Status
 
-Phase 0: project skeleton. Nothing works yet. The roadmap is in
-[docs/architecture.md](docs/architecture.md#roadmap).
+**Phase 1:** encrypted USB session, QR pairing, status and photos. Verified end
+to end on an iPhone 7 with iOS 15.8.2 over USB, from the `phonekey` CLI on macOS.
+Not yet tried on a Linux host (only cross-compiled). No security key yet; that is
+Phase 2. The roadmap is in [docs/architecture.md](docs/architecture.md#roadmap).
+
+```bash
+cd linux && go build ./cmd/phonekey
+./phonekey pair            # scan the QR code with PhoneKey → Pair new computer
+./phonekey status
+./phonekey photo -o desk.jpg   # after "Allow photos" in the app
+```
 
 ## Layout
 
 ```
-ios/     iOS app (Swift, SwiftUI, iOS 15+)
-linux/   Linux daemon
-docs/    architecture and wire protocol
+ios/            iOS app (Swift, SwiftUI, iOS 15+)
+ios/PhoneKeyCore  protocol, Noise and session logic as a Swift package
+linux/          host CLI in Go (Linux, also runs on macOS)
+docs/           architecture, wire protocol, test vectors
 ```
 
 ## Security notes
@@ -53,7 +61,10 @@ Xcode 26 or later. Open `ios/PhoneKey.xcodeproj`, or from the command line:
 
 ```bash
 xcodebuild -project ios/PhoneKey.xcodeproj -scheme PhoneKey -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build
+(cd ios/PhoneKeyCore && swift test)
 ```
+
+The host CLI is described in [linux/README.md](linux/README.md).
 
 Current Xcode has no iOS 15 simulator, so iOS 15 behaviour can only be checked
 on a real device.

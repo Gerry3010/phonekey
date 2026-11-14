@@ -6,6 +6,10 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		B428A84DAB63F462122F5220 /* PhoneKeyCore in Frameworks */ = {isa = PBXBuildFile; productRef = 253832045E94E6A830E733F0 /* PhoneKeyCore */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		3170DC64FEA5E406472EE3EB /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -19,17 +23,18 @@
 /* Begin PBXFileReference section */
 		333E1B5D69864822894431F9 /* PhoneKey.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PhoneKey.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		3B7D87FDEA29C55D514BBB65 /* PhoneKeyTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = PhoneKeyTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		D5BFB7E1AFAADA8DABDA73DE /* PhoneKey-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "PhoneKey-Info.plist"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		B53534255B911D63A8C01AB3 /* PhoneKey */ = {
-			isa = PBXFileSystemSynchronizedRootGroup;
-			path = PhoneKey;
-			sourceTree = "<group>";
-		};
 		0B806B5087372418E6BDDFE2 /* PhoneKeyTests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = PhoneKeyTests;
+			sourceTree = "<group>";
+		};
+		B53534255B911D63A8C01AB3 /* PhoneKey */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = PhoneKey;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -39,6 +44,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				B428A84DAB63F462122F5220 /* PhoneKeyCore in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -55,6 +61,7 @@
 		87658E9FC0AA5E07BCF9478C = {
 			isa = PBXGroup;
 			children = (
+				D5BFB7E1AFAADA8DABDA73DE /* PhoneKey-Info.plist */,
 				B53534255B911D63A8C01AB3 /* PhoneKey */,
 				0B806B5087372418E6BDDFE2 /* PhoneKeyTests */,
 				A86A250C535281A6E747B923 /* Products */,
@@ -73,28 +80,6 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		CC7AB5BB22D4BECC124F13FD /* PhoneKey */ = {
-			isa = PBXNativeTarget;
-			buildConfigurationList = 23E296C7FB367EBF02785746 /* Build configuration list for PBXNativeTarget "PhoneKey" */;
-			buildPhases = (
-				6526A4C3C3EBA67D7E447279 /* Sources */,
-				3938BF8DE263F01B995B6E89 /* Frameworks */,
-				E5CE5E7AAFAB95671B87579F /* Resources */,
-			);
-			buildRules = (
-			);
-			dependencies = (
-			);
-			fileSystemSynchronizedGroups = (
-				B53534255B911D63A8C01AB3 /* PhoneKey */,
-			);
-			name = PhoneKey;
-			packageProductDependencies = (
-			);
-			productName = PhoneKey;
-			productReference = 333E1B5D69864822894431F9 /* PhoneKey.app */;
-			productType = "com.apple.product-type.application";
-		};
 		36021B1EE1422DC9FA0589B6 /* PhoneKeyTests */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 8B5CDBE03DDEDAD4BFE1A329 /* Build configuration list for PBXNativeTarget "PhoneKeyTests" */;
@@ -118,6 +103,29 @@
 			productReference = 3B7D87FDEA29C55D514BBB65 /* PhoneKeyTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
+		CC7AB5BB22D4BECC124F13FD /* PhoneKey */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 23E296C7FB367EBF02785746 /* Build configuration list for PBXNativeTarget "PhoneKey" */;
+			buildPhases = (
+				6526A4C3C3EBA67D7E447279 /* Sources */,
+				3938BF8DE263F01B995B6E89 /* Frameworks */,
+				E5CE5E7AAFAB95671B87579F /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				B53534255B911D63A8C01AB3 /* PhoneKey */,
+			);
+			name = PhoneKey;
+			packageProductDependencies = (
+				253832045E94E6A830E733F0 /* PhoneKeyCore */,
+			);
+			productName = PhoneKey;
+			productReference = 333E1B5D69864822894431F9 /* PhoneKey.app */;
+			productType = "com.apple.product-type.application";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -128,12 +136,12 @@
 				LastSwiftUpdateCheck = 2660;
 				LastUpgradeCheck = 2660;
 				TargetAttributes = {
-					CC7AB5BB22D4BECC124F13FD = {
-						CreatedOnToolsVersion = 26.6;
-					};
 					36021B1EE1422DC9FA0589B6 = {
 						CreatedOnToolsVersion = 26.6;
 						TestTargetID = CC7AB5BB22D4BECC124F13FD;
+					};
+					CC7AB5BB22D4BECC124F13FD = {
+						CreatedOnToolsVersion = 26.6;
 					};
 				};
 			};
@@ -146,6 +154,9 @@
 			);
 			mainGroup = 87658E9FC0AA5E07BCF9478C;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				3D30B535CBDF4345A92B2435 /* XCLocalSwiftPackageReference "PhoneKeyCore" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = A86A250C535281A6E747B923 /* Products */;
 			projectDirPath = "";
@@ -158,14 +169,14 @@
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
-		E5CE5E7AAFAB95671B87579F /* Resources */ = {
+		BB31D37398BD932C1EE98D44 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		BB31D37398BD932C1EE98D44 /* Resources */ = {
+		E5CE5E7AAFAB95671B87579F /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -200,6 +211,142 @@
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
+		0E2E54C1AE48E42D0EB6F9E2 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = ND9MT2PP6B;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "PhoneKey-Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = PhoneKey;
+				INFOPLIST_KEY_NSCameraUsageDescription = "PhoneKey uses the camera to scan pairing codes and, if you allow it, to take photos for a paired computer.";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = UIInterfaceOrientationPortrait;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 0.2.0;
+				PRODUCT_BUNDLE_IDENTIFIER = net.geraldhofbauer.phonekey;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+		666E6BD982B7E7F12A5D18B6 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = ND9MT2PP6B;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				MARKETING_VERSION = 0.2.0;
+				PRODUCT_BUNDLE_IDENTIFIER = net.geraldhofbauer.phonekey.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/PhoneKey.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/PhoneKey";
+			};
+			name = Debug;
+		};
+		7CF77ACE10B9F6E9CCFD3CB5 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = ND9MT2PP6B;
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		98C185CD55CC8CEDACB03A78 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = ND9MT2PP6B;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "PhoneKey-Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = PhoneKey;
+				INFOPLIST_KEY_NSCameraUsageDescription = "PhoneKey uses the camera to scan pairing codes and, if you allow it, to take photos for a paired computer.";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = UIInterfaceOrientationPortrait;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 0.2.0;
+				PRODUCT_BUNDLE_IDENTIFIER = net.geraldhofbauer.phonekey;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
 		ACD320B2D77F21E0469A1C0D /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -264,138 +411,6 @@
 			};
 			name = Debug;
 		};
-		7CF77ACE10B9F6E9CCFD3CB5 /* Release */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				ALWAYS_SEARCH_USER_PATHS = NO;
-				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
-				CLANG_ANALYZER_NONNULL = YES;
-				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
-				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
-				CLANG_ENABLE_MODULES = YES;
-				CLANG_ENABLE_OBJC_ARC = YES;
-				CLANG_ENABLE_OBJC_WEAK = YES;
-				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
-				CLANG_WARN_BOOL_CONVERSION = YES;
-				CLANG_WARN_COMMA = YES;
-				CLANG_WARN_CONSTANT_CONVERSION = YES;
-				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
-				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
-				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
-				CLANG_WARN_EMPTY_BODY = YES;
-				CLANG_WARN_ENUM_CONVERSION = YES;
-				CLANG_WARN_INFINITE_RECURSION = YES;
-				CLANG_WARN_INT_CONVERSION = YES;
-				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
-				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
-				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
-				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
-				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
-				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
-				CLANG_WARN_STRICT_PROTOTYPES = YES;
-				CLANG_WARN_SUSPICIOUS_MOVE = YES;
-				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
-				CLANG_WARN_UNREACHABLE_CODE = YES;
-				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
-				COPY_PHASE_STRIP = NO;
-				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
-				DEVELOPMENT_TEAM = ND9MT2PP6B;
-				ENABLE_NS_ASSERTIONS = NO;
-				ENABLE_STRICT_OBJC_MSGSEND = YES;
-				ENABLE_USER_SCRIPT_SANDBOXING = YES;
-				GCC_C_LANGUAGE_STANDARD = gnu17;
-				GCC_NO_COMMON_BLOCKS = YES;
-				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
-				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
-				GCC_WARN_UNDECLARED_SELECTOR = YES;
-				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
-				GCC_WARN_UNUSED_FUNCTION = YES;
-				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
-				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
-				MTL_ENABLE_DEBUG_INFO = NO;
-				MTL_FAST_MATH = YES;
-				SDKROOT = iphoneos;
-				SWIFT_COMPILATION_MODE = wholemodule;
-				VALIDATE_PRODUCT = YES;
-			};
-			name = Release;
-		};
-		0E2E54C1AE48E42D0EB6F9E2 /* Debug */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = ND9MT2PP6B;
-				ENABLE_PREVIEWS = YES;
-				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = PhoneKey;
-				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
-				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
-				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
-				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = UIInterfaceOrientationPortrait;
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/Frameworks",
-				);
-				MARKETING_VERSION = 0.1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = net.geraldhofbauer.phonekey;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = 1;
-			};
-			name = Debug;
-		};
-		98C185CD55CC8CEDACB03A78 /* Release */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = ND9MT2PP6B;
-				ENABLE_PREVIEWS = YES;
-				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = PhoneKey;
-				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
-				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
-				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
-				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = UIInterfaceOrientationPortrait;
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/Frameworks",
-				);
-				MARKETING_VERSION = 0.1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = net.geraldhofbauer.phonekey;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = 1;
-			};
-			name = Release;
-		};
-		666E6BD982B7E7F12A5D18B6 /* Debug */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				BUNDLE_LOADER = "$(TEST_HOST)";
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = ND9MT2PP6B;
-				GENERATE_INFOPLIST_FILE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
-				MARKETING_VERSION = 0.1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = net.geraldhofbauer.phonekey.tests;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SWIFT_EMIT_LOC_STRINGS = NO;
-				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = 1;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/PhoneKey.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/PhoneKey";
-			};
-			name = Debug;
-		};
 		C2E2B65416102CFE0235B745 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -405,7 +420,7 @@
 				DEVELOPMENT_TEAM = ND9MT2PP6B;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
-				MARKETING_VERSION = 0.1.0;
+				MARKETING_VERSION = 0.2.0;
 				PRODUCT_BUNDLE_IDENTIFIER = net.geraldhofbauer.phonekey.tests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = NO;
@@ -418,15 +433,6 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		BFD9F58EEADB74AD491F47A0 /* Build configuration list for PBXProject "PhoneKey" */ = {
-			isa = XCConfigurationList;
-			buildConfigurations = (
-				ACD320B2D77F21E0469A1C0D /* Debug */,
-				7CF77ACE10B9F6E9CCFD3CB5 /* Release */,
-			);
-			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Release;
-		};
 		23E296C7FB367EBF02785746 /* Build configuration list for PBXNativeTarget "PhoneKey" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
@@ -445,7 +451,30 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
+		BFD9F58EEADB74AD491F47A0 /* Build configuration list for PBXProject "PhoneKey" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				ACD320B2D77F21E0469A1C0D /* Debug */,
+				7CF77ACE10B9F6E9CCFD3CB5 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 /* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		3D30B535CBDF4345A92B2435 /* XCLocalSwiftPackageReference "PhoneKeyCore" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = PhoneKeyCore;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		253832045E94E6A830E733F0 /* PhoneKeyCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = PhoneKeyCore;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = E40EEF30FE35AD6F532D02E6 /* Project object */;
 }
