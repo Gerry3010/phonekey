@@ -47,16 +47,43 @@ One-time setup (needs root once):
 
 ```bash
 sudo install -m 0755 phonekey /usr/local/bin/phonekey
-sudo install -m 0644 contrib/90-phonekey-uhid.rules /etc/udev/rules.d/
+sudo install -m 0644 contrib/70-phonekey-uhid.rules /etc/udev/rules.d/
 echo uhid | sudo tee /etc/modules-load.d/uhid.conf
+sudo udevadm control --reload
 sudo modprobe uhid
-sudo groupadd -f -r uhid && sudo usermod -aG uhid "$USER"
-sudo udevadm control --reload && sudo udevadm trigger
-# log out and in again for the group, then:
-phonekey pair
+sudo udevadm trigger --action=add --subsystem-match=misc --sysname-match=uhid
+getfacl -p /dev/uhid      # should list your user with rw-
+phonekey pair             # needs the phone; enable the service only after this
 mkdir -p ~/.config/systemd/user && cp contrib/phonekey-fido.service ~/.config/systemd/user/
 systemctl --user enable --now phonekey-fido
 ```
+
+The udev rule tags `/dev/uhid` with `uaccess`, so systemd-logind gives the user
+logged in at the machine access to it, the way it handles `/dev/uinput` for game
+controllers. There is no group to join and no need to log out. The access ends
+with the local session, so a login over SSH alone cannot start the key. Like
+any `/dev/uhid` access, it lets your user create other virtual HID devices too,
+keyboards included.
+
+On a machine you only reach over SSH, such as a test VM (`limactl shell`), there
+is no local session and `uaccess` grants nothing. Use a group there instead:
+
+```bash
+sudo groupadd -f -r uhid && sudo usermod -aG uhid "$USER"
+echo 'KERNEL=="uhid", SUBSYSTEM=="misc", GROUP="uhid", MODE="0660"' \
+  | sudo tee /etc/udev/rules.d/70-phonekey-uhid.rules
+sudo udevadm control --reload && sudo modprobe uhid
+sudo udevadm trigger --action=add --subsystem-match=misc --sysname-match=uhid
+# log in again for the group
+```
+
+Before this, the setup used that group with `90-phonekey-uhid.rules` on every
+machine. On a desktop, remove `/etc/udev/rules.d/90-phonekey-uhid.rules` when you
+switch to the `uaccess` rule.
+
+Enable the service only after `phonekey pair`: if an unpaired phone is connected,
+`phonekey fido run` exits with an error and systemd would restart it every five
+seconds.
 
 The key's `/dev/hidraw*` node is opened up to the logged-in user by systemd's
 own rule (`60-fido-id.rules`), as for any FIDO key. Check with `fido2-token -L`
