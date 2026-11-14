@@ -118,6 +118,11 @@ public final class Authenticator {
         0x4E, 0x3B, 0x1F, 0xE3, 0xC7, 0x5C, 0x40, 0x55, 0xB7, 0x91, 0xC9, 0x99, 0xFF, 0x91, 0x59, 0x51,
     ])
     public static let maxMessageSize = 1200
+    /// Without these two, Chrome probes every allowList entry on its own with
+    /// `up = false`, which a Secure Enclave key cannot answer (§10). 16
+    /// descriptors of 32-byte IDs fit well within `maxMessageSize`.
+    public static let maxCredentialCountInList = 16
+    public static let credentialIdLength = 32
 
     enum Command: UInt8 {
         case makeCredential = 0x01
@@ -193,6 +198,8 @@ public final class Authenticator {
             .int(4): .map([.text("rk"): .bool(true), .text("up"): .bool(true),
                            .text("uv"): .bool(true), .text("plat"): .bool(false)]),
             .int(5): .int(Self.maxMessageSize),
+            .int(7): .int(Self.maxCredentialCountInList),
+            .int(8): .int(Self.credentialIdLength),
             .int(9): .array([.text("usb")]),
             .int(10): .array([.map([.text("alg"): .int(-7), .text("type"): .text("public-key")])]),
         ])
@@ -237,7 +244,7 @@ public final class Authenticator {
             userDisplayName: user["displayName"]?.text, passkey: passkey)))
         try Task.checkCancellation()
 
-        let credentialId = random(32)
+        let credentialId = random(Self.credentialIdLength)
         let publicKey: Data
         do {
             publicKey = try keys.createKey(id: credentialId)
