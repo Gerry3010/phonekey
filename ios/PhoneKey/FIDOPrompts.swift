@@ -68,9 +68,10 @@ final class FIDOPrompts: ObservableObject {
         authContext = context
         authenticating = true
         note = nil
-        context.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, localizedReason: reason) { ok, error in
+        let promptId = active.id
+        let reply: @Sendable (Bool, Error?) -> Void = { ok, error in
             Task { @MainActor in
-                guard self.authContext === context, self.active?.id == active.id else { return }
+                guard self.authContext === context, self.active?.id == promptId else { return }
                 self.authenticating = false
                 if ok {
                     self.approve(with: context)
@@ -79,6 +80,14 @@ final class FIDOPrompts: ObservableObject {
                     self.touchIDDidNotSucceed(error as? LAError)
                 }
             }
+        }
+        if case .signIn = active.kind, let access = try? SecureEnclaveKeys.accessControl() {
+            // The Secure Enclave only takes a context that was evaluated for
+            // signing with a key under this rule; a plain policy check makes
+            // the signature ask again.
+            context.evaluateAccessControl(access, operation: .useKeySign, localizedReason: reason, reply: reply)
+        } else {
+            context.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, localizedReason: reason, reply: reply)
         }
     }
 

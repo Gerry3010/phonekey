@@ -21,7 +21,8 @@ final class SecureEnclaveKeys: CredentialKeys {
         Data((tagPrefix + id.base64URLEncodedString).utf8)
     }
 
-    func createKey(id: Data) throws -> Data {
+    /// The rule every credential key carries: usable only after Touch ID.
+    static func accessControl() throws -> SecAccessControl {
         var error: Unmanaged<CFError>?
         #if targetEnvironment(simulator)
         let flags: SecAccessControlCreateFlags = [.biometryAny]
@@ -31,6 +32,12 @@ final class SecureEnclaveKeys: CredentialKeys {
         guard let access = SecAccessControlCreateWithFlags(
             nil, kSecAttrAccessibleWhenUnlockedThisDeviceOnly, flags, &error)
         else { throw error!.takeRetainedValue() as Error }
+        return access
+    }
+
+    func createKey(id: Data) throws -> Data {
+        var error: Unmanaged<CFError>?
+        let access = try Self.accessControl()
 
         var attributes: [String: Any] = [
             kSecAttrKeyType as String: kSecAttrKeyTypeECSECPrimeRandom,
