@@ -318,8 +318,17 @@ CTAP 2.0 (FIDO Alliance, "Client to Authenticator Protocol", Proposed Standard
 | 3 aaguid | `4e3b1fe3-c75c-4055-b791-c999ff915951` |
 | 4 options | `{"rk": true, "up": true, "uv": true, "plat": false}` (no `clientPin`) |
 | 5 maxMsgSize | 1200 |
+| 7 maxCredentialCountInList | 16 |
+| 8 maxCredentialIdLength | 32 |
 | 9 transports | `["usb"]` |
 | 10 algorithms | `[{"alg": -7, "type": "public-key"}]` |
+
+Keys 7 and 8 matter for Chrome: without both it sends allow and exclude lists
+one entry at a time, each first as a silent probe (`up = false`), which the
+phone cannot answer with a signature (see getAssertion). With them, up to 16
+IDs of at most 32 bytes go into one request with `up = true`. More than 16
+matching candidates still end in probes; Chrome then reports the key as not
+registered.
 
 ### authenticatorMakeCredential (`0x01`)
 

@@ -132,6 +132,31 @@ final class AuthenticatorTests: XCTestCase {
         XCTAssertEqual(info?[4]?["uv"], .bool(true))
         XCTAssertNil(info?[4]?["clientPin"])
         XCTAssertEqual(info?[10]?.array?.first?["alg"]?.int, -7)
+        // Chrome batches allow lists only with both of these (§10).
+        XCTAssertEqual(info?[7]?.int, 16)
+        XCTAssertEqual(info?[8]?.int, 32)
+    }
+
+    /// A full batch, as Chrome sends it after reading getInfo 7 and 8, fits the
+    /// message size and finds the credential among foreign IDs.
+    func testFullAllowListBatch() async throws {
+        let (credentialId, _) = try await register(rk: false)
+        XCTAssertEqual(credentialId.count, Authenticator.credentialIdLength)
+        func descriptor(_ id: Data) -> CBOR { .map([.text("id"): .bytes(id), .text("type"): .text("public-key")]) }
+        let foreign = (0..<(Authenticator.maxCredentialCountInList - 1)).map { _ in
+            Data((0..<Authenticator.credentialIdLength).map { _ in UInt8.random(in: 0...255) })
+        }
+        let allow = CBOR.array((foreign + [credentialId]).map(descriptor))
+
+        let (status, body) = await call(0x02, .map([.int(1): .text("github.com"), .int(2): .bytes(clientDataHash),
+                                                    .int(3): allow]))
+        XCTAssertEqual(status, 0)
+        XCTAssertEqual(body?[1]?["id"]?.bytes, credentialId)
+
+        // Even with the longest possible RP ID the request stays within maxMsgSize.
+        let longest = CBOR.map([.int(1): .text(String(repeating: "a", count: 253)), .int(2): .bytes(clientDataHash),
+                                .int(3): allow, .int(5): .map([.text("up"): .bool(true)])])
+        XCTAssertLessThan(1 + longest.encoded.count, Authenticator.maxMessageSize)
     }
 
     func testPasskeyRegistrationAndSignIn() async throws {
