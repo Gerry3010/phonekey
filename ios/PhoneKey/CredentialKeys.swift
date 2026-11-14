@@ -10,6 +10,13 @@ import Security
 final class SecureEnclaveKeys: CredentialKeys {
     private static let tagPrefix = "net.geraldhofbauer.phonekey.credential."
 
+    /// The Touch ID from the sign-in card, if the user just gave one.
+    private let handoff: TouchIDHandoff?
+
+    init(handoff: TouchIDHandoff? = nil) {
+        self.handoff = handoff
+    }
+
     private static func tag(_ id: Data) -> Data {
         Data((tagPrefix + id.base64URLEncodedString).utf8)
     }
@@ -48,9 +55,13 @@ final class SecureEnclaveKeys: CredentialKeys {
     }
 
     func sign(id: Data, data: Data, reason: String) async throws -> Data {
-        let context = LAContext()
+        // Normally the card has just done Touch ID; only without it does the
+        // signature ask on its own.
+        let context = handoff?.take() ?? LAContext()
         context.localizedReason = reason
         context.localizedCancelTitle = "Cancel"
+        context.localizedFallbackTitle = ""
+        defer { context.invalidate() }
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Data, Error>) in
                 // SecKeyCreateSignature blocks while Touch ID is shown.

@@ -331,7 +331,9 @@ CTAP 2.0 (FIDO Alliance, "Client to Authenticator Protocol", Proposed Standard
   `0x35` (`CTAP2_ERR_PIN_NOT_SET`). A non-empty `pinAuth`: `0x36`
   (`CTAP2_ERR_PIN_AUTH_INVALID`), since there is no PIN.
 - Otherwise the phone shows the site (`rp.id`), the account and whether it
-  becomes a passkey (`rk`), then asks for Touch ID. Declined or failed: `0x27`
+  becomes a passkey (`rk`), and opens Touch ID at once. Cancelling or failing
+  Touch ID does not decline: the details stay on screen with a button to try
+  Touch ID again. Only the explicit Decline button answers `0x27`
   (`CTAP2_ERR_OPERATION_DENIED`). No answer within 60 s: `0x2F`
   (`CTAP2_ERR_USER_ACTION_TIMEOUT`).
 - A new P-256 key is created in the Secure Enclave, usable only after Touch ID
@@ -359,8 +361,11 @@ CTAP 2.0 (FIDO Alliance, "Client to Authenticator Protocol", Proposed Standard
   display), so the response never sets `numberOfCredentials` and
   `authenticatorGetNextAssertion` (`0x08`) answers `0x30`
   (`CTAP2_ERR_NOT_ALLOWED`).
-- The phone shows the site and the account; Touch ID unlocks the signature.
-  Flags `UP | UV` (`0x05`); the per-credential counter goes up by one.
+- The phone shows the site and the account and opens Touch ID at once; with
+  several discoverable candidates the user picks the account first. Cancelling
+  Touch ID works as for makeCredential. That one Touch ID also unlocks the
+  signature. Flags `UP | UV` (`0x05`); the per-credential counter goes up by
+  one.
 - The response contains `credential`, `authData`, `signature` (DER) and, for
   discoverable credentials, `user` (`id`, `name`, `displayName`).
 

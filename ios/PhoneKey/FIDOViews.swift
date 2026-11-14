@@ -48,24 +48,33 @@ struct FIDOPromptOverlay: View {
             if let account = p.userName ?? p.userDisplayName {
                 Label(account, systemImage: "person.crop.circle").foregroundColor(.secondary)
             }
-            buttons(primary: "Continue with Touch ID", action: prompts.approveRegistration)
+            touchIDButtons()
 
         case let .signIn(p):
             Text("Sign in").font(.title3.bold())
             site(p.rpId, name: nil)
-            VStack(spacing: 8) {
-                ForEach(p.candidates) { credential in
-                    Button {
-                        prompts.choose(credential)
-                    } label: {
-                        Label(credential.accountLabel, systemImage: "person.crop.circle")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.large)
+            if let chosen = prompts.chosen {
+                Label(chosen.accountLabel, systemImage: "person.crop.circle").foregroundColor(.secondary)
+                touchIDButtons()
+                if p.candidates.count > 1 {
+                    Button("Other account", action: prompts.chooseAnotherAccount)
+                        .disabled(prompts.authenticating)
                 }
+            } else {
+                VStack(spacing: 8) {
+                    ForEach(p.candidates) { credential in
+                        Button {
+                            prompts.choose(credential)
+                        } label: {
+                            Label(credential.accountLabel, systemImage: "person.crop.circle")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.large)
+                    }
+                }
+                declineButton()
             }
-            Button("Cancel", role: .cancel, action: prompts.decline)
 
         case let .excluded(rpId):
             Text("Already registered").font(.title3.bold())
@@ -90,6 +99,24 @@ struct FIDOPromptOverlay: View {
                 Text(name).font(.footnote).foregroundColor(.secondary)
             }
         }
+    }
+
+    /// Touch ID again (after it was cancelled) and the explicit Decline.
+    private func touchIDButtons() -> some View {
+        VStack(spacing: 8) {
+            Button(action: prompts.authenticate) {
+                Label("Touch ID", systemImage: "touchid").frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .disabled(prompts.authenticating)
+            declineButton()
+        }
+    }
+
+    private func declineButton() -> some View {
+        Button("Decline", role: .destructive, action: prompts.decline)
+            .disabled(prompts.authenticating)
     }
 
     private func buttons(primary: String, action: @escaping () -> Void, showCancel: Bool = true) -> some View {

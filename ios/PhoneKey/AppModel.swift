@@ -51,7 +51,9 @@ final class AppModel: ObservableObject {
         // The property initializer ran before monitoring was on and saw "unknown".
         battery = BatteryInfo.current
 
-        let keys = SecureEnclaveKeys()
+        let handoff = TouchIDHandoff()
+        fidoPrompts.handoff = handoff
+        let keys = SecureEnclaveKeys(handoff: handoff)
         credentials = KeychainCredentialStore(keys: keys)
         authenticator = Authenticator(store: credentials, keys: keys, ui: fidoPrompts)
 
