@@ -1,8 +1,9 @@
 # PhoneKey — Notizen für Claude
 
-Ein altes iPhone 7 als Peripherie-Station für einen Linux-Rechner: FIDO2-Security-Key mit
-Touch ID, Kamera, Mikrofon, Freigabe-Knopf für Coding-Agents. Monorepo aus iOS-App,
-Linux-Daemon und gemeinsamem Protokoll.
+Ein altes iPhone 7 als Peripherie-Station für einen Linux-Rechner: FIDO2-Security-Key und
+Passkeys mit Touch ID, Kamera, Mikrofon. Monorepo aus iOS-App, Linux-Daemon und gemeinsamem
+Protokoll. Touch ID dient nur dem Security-Key; einen Freigabe-Knopf für Coding-Agents gibt es
+bewusst nicht.
 
 ## Die eine Regel
 
@@ -72,6 +73,13 @@ Das iPhone SE (3. Gen.) hat dieselbe Bildschirmgröße wie das iPhone 7 (4,7″)
 Simulator starten, dann `phonekey pair -connect tcp:127.0.0.1:20555` und die ausgegebene URL mit
 `xcrun simctl openurl booted '<url>'` öffnen. `PHONEKEY_CONFIG_DIR` auf ein Testverzeichnis setzen,
 damit echte Host-Keys unberührt bleiben. Im Simulator liefert die Kamera ein Testbild.
+
+**Aufs iPhone 7 (iOS 15) installieren:** `xcodebuild test` auf dem Gerät scheitert mit „Logic
+Testing Unavailable“, und `devicectl` kann Geräte vor iOS 17 nicht bedienen („usage assertion“).
+Was funktioniert: signiert bauen (`-allowProvisioningUpdates`), dann per Xcode Run aufs Gerät, zum
+Beispiel per AppleScript (`run destinations … whose name contains "iPhone 7"`, `run`). Beim ersten
+Start muss das iPhone online sein, damit iOS das Entwicklerzertifikat prüft (Einstellungen → Allgemein
+→ VPN & Geräteverwaltung → App überprüfen). Danach geht es offline. Das Entwicklerprofil gilt ein Jahr.
 
 **Vektoren:** Nach jeder Protokolländerung `go run ./cmd/gen-vectors ../docs/protocol-vectors.json`
 in `linux/`. Go und Swift prüfen beide gegen diese Datei.

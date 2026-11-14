@@ -247,8 +247,8 @@ A PSK is used for one pairing only. The host SHOULD give up after 5 minutes.
 | host | static X25519 key | file, mode 0600, in the user config directory |
 | host | paired phones (public keys, names) | file in the user config directory |
 
-The session key is not the FIDO or approval key. Those are created later in the
-Secure Enclave (Phase 2 and 3).
+The session key is not a FIDO key. FIDO credential keys are created in the
+Secure Enclave (Phase 2).
 
 ## 8. Security notes
 

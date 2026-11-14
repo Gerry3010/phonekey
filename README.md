@@ -1,8 +1,7 @@
 # phonekey
 
 Turn an old iPhone into a desk peripheral for a Linux machine: a Touch-ID-gated
-FIDO2 security key, a camera, a microphone and an approval button for AI coding
-agents.
+FIDO2 security key and passkey store, a camera and a microphone.
 
 > **Experimental.** Do not use phonekey as your only security key. Always keep a
 > second key or a recovery method for every account you protect with it.
@@ -18,17 +17,16 @@ phone offers into ordinary Linux devices:
 | FIDO2 authenticator, keys in the Secure Enclave, Touch ID per signature | virtual USB security key via `/dev/uhid` (browsers, `ssh`, `pam-u2f`) |
 | Camera | webcam via `v4l2loopback`, or single photos on request |
 | Microphone | PipeWire source, or recordings on request |
-| Touch ID approval | signed yes/no for risky actions of a coding agent |
 
 More in [docs/architecture.md](docs/architecture.md). The contract between phone
 and daemon is [docs/protocol.md](docs/protocol.md).
 
 ## Status
 
-**Phase 1:** encrypted USB session, QR pairing, status, photos and desk mode.
-It works end to end between the `phonekey` CLI and the app in the iOS Simulator,
-but it has **not been tried on a real iPhone 7 yet**. No security key yet. The
-roadmap is in [docs/architecture.md](docs/architecture.md#roadmap).
+**Phase 1:** encrypted USB session, QR pairing, status and photos. Verified end
+to end on an iPhone 7 with iOS 15.8.2 over USB, from the `phonekey` CLI on macOS.
+Not yet tried on a Linux host (only cross-compiled). No security key yet; that is
+Phase 2. The roadmap is in [docs/architecture.md](docs/architecture.md#roadmap).
 
 ```bash
 cd linux && go build ./cmd/phonekey
