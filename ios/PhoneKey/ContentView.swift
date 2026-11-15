@@ -76,6 +76,11 @@ private struct MainView: View {
                     } label: {
                         Label("Passkeys & security keys", systemImage: "key")
                     }
+                    NavigationLink {
+                        PinSettingsView()
+                    } label: {
+                        Label("Security key PIN", systemImage: "number")
+                    }
                 } footer: {
                     Text("Keys live in the Secure Enclave of this iPhone and are not synced or backed up. "
                         + "Keep a second way to sign in for every account.")

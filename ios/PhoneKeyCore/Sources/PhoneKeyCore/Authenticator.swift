@@ -21,9 +21,13 @@ public enum CTAPStatus: UInt8, Error {
     case noCredentials = 0x2E
     case userActionTimeout = 0x2F
     case notAllowed = 0x30
+    case pinInvalid = 0x31
+    case pinBlocked = 0x32
     case pinAuthInvalid = 0x33
+    case pinAuthBlocked = 0x34
     case pinNotSet = 0x35
     case puatRequired = 0x36
+    case pinPolicyViolation = 0x37
     case uvBlocked = 0x3C
     case invalidSubcommand = 0x3E
     case unauthorizedPermission = 0x40
@@ -131,6 +135,9 @@ public struct RegistrationPrompt: Equatable {
     /// A pinUvAuthToken already carried the Touch ID: nothing to ask, only
     /// to note for the confirmation.
     public var verified = false
+    /// A token from getPinToken, whose prompt could not name the site: show
+    /// it and wait for a tap, no second Touch ID (§10).
+    public var confirmByTap = false
 }
 
 public struct SignInPrompt: Equatable {
@@ -139,6 +146,8 @@ public struct SignInPrompt: Equatable {
     /// A pinUvAuthToken already carried the Touch ID: with one candidate
     /// nothing to ask, with several only which account (a tap).
     public var verified = false
+    /// As for registration: a getPinToken token's first use shows the site.
+    public var confirmByTap = false
 }
 
 /// getPinUvAuthTokenUsingUvWithPermissions: what the token is for.
@@ -177,14 +186,19 @@ public protocol AuthenticatorUI: AnyObject {
     func confirmSelection() async -> UserDecision
     /// A pinUvAuthToken via Touch ID: shows host, site and purpose, asks.
     func authorizeToken(_ prompt: TokenPrompt) async -> TokenDecision
+    /// A PIN request (3c): shows what it is for and asks for Touch ID, which
+    /// must be able to decrypt the stored PIN hash (and, for a token that
+    /// signs, to sign once).
+    func authorizePin(_ prompt: PinPrompt) async -> TokenDecision
     /// Credential management deletes a passkey: shows it, waits for a tap.
     func confirmDeletion(_ credential: StoredCredential) async -> UserDecision
     /// iOS has locked Touch ID after failed attempts.
     var touchIDLocked: Bool { get }
 }
 
-/// A CTAP 2.1 authenticator without a PIN (docs/protocol.md §10, steps 3a
-/// and 3b): `hmac-secret`, pinUvAuthToken via Touch ID, credential management.
+/// A CTAP 2.1 authenticator (docs/protocol.md §10, steps 3a to 3c):
+/// `hmac-secret`, pinUvAuthToken via Touch ID, credential management, and a
+/// PIN that only works together with Touch ID.
 public final class Authenticator {
     public static let aaguid = Data([
         0x4E, 0x3B, 0x1F, 0xE3, 0xC7, 0x5C, 0x40, 0x55, 0xB7, 0x91, 0xC9, 0x99, 0xFF, 0x91, 0x59, 0x51,
@@ -208,17 +222,20 @@ public final class Authenticator {
     }
 
     private let store: CredentialStore
-    private let keys: CredentialKeys
-    private let ui: AuthenticatorUI
-    private let random: (Int) -> Data
-    private let now: () -> Date
+    let keys: CredentialKeys
+    let ui: AuthenticatorUI
+    let pins: PinStorage
+    let pinEpoch = PinEpoch()
+    let random: (Int) -> Data
+    let now: () -> Date
 
-    public init(store: CredentialStore, keys: CredentialKeys, ui: AuthenticatorUI,
+    public init(store: CredentialStore, keys: CredentialKeys, ui: AuthenticatorUI, pins: PinStorage,
                 random: @escaping (Int) -> Data = { n in Data((0..<n).map { _ in UInt8.random(in: 0...255) }) },
                 now: @escaping () -> Date = Date.init) {
         self.store = store
         self.keys = keys
         self.ui = ui
+        self.pins = pins
         self.random = random
         self.now = now
     }
@@ -284,6 +301,7 @@ public final class Authenticator {
             .int(3): .bytes(Self.aaguid),
             .int(4): .map([.text("rk"): .bool(true), .text("up"): .bool(true),
                            .text("uv"): .bool(true), .text("plat"): .bool(false),
+                           .text("clientPin"): .bool(pinIsSet),
                            .text("pinUvAuthToken"): .bool(true), .text("credMgmt"): .bool(true)]),
             .int(5): .int(Self.maxMessageSize),
             .int(6): .array([.int(2), .int(1)]),
@@ -291,6 +309,7 @@ public final class Authenticator {
             .int(8): .int(Self.credentialIdLength),
             .int(9): .array([.text("usb")]),
             .int(10): .array([.map([.text("alg"): .int(-7), .text("type"): .text("public-key")])]),
+            .int(13): .int(Self.minPinLength),
             .int(17): .int(1), // preferredPlatformUvAttempts: Touch ID retries on its own
             .int(18): .int(2), // uvModality: fingerprint
         ])
@@ -322,10 +341,11 @@ public final class Authenticator {
             if param.isEmpty {
                 // Zero length: authenticator selection.
                 try check(await ui.confirmSelection())
-                throw CTAPStatus.pinNotSet
+                throw pinIsSet ? CTAPStatus.pinInvalid : CTAPStatus.pinNotSet
             }
             token = try session.useToken(param: param, protocolNumber: p[9]?.int, message: clientDataHash,
-                                         permission: TokenPrompt.makeCredential, scope: .rpId(rpId), now: now())
+                                         permission: TokenPrompt.makeCredential, scope: .rpId(rpId),
+                                         epoch: pinEpoch.current, now: now())
         }
 
         guard params.contains(where: { $0["alg"]?.int == -7 && $0["type"]?.text == "public-key" }) else {
@@ -344,6 +364,7 @@ public final class Authenticator {
             rpId: rpId, rpName: rp["name"]?.text, userName: user["name"]?.text,
             userDisplayName: user["displayName"]?.text, passkey: passkey)
         registration.verified = token != nil
+        registration.confirmByTap = token?.needsTap == true
         try check(await ui.confirmRegistration(registration))
         try Task.checkCancellation()
 
@@ -420,11 +441,11 @@ public final class Authenticator {
             if param.isEmpty {
                 // Zero length: authenticator selection, as for makeCredential.
                 try check(await ui.confirmSelection())
-                throw CTAPStatus.pinNotSet
+                throw pinIsSet ? CTAPStatus.pinInvalid : CTAPStatus.pinNotSet
             }
             token = try session.useToken(param: param, protocolNumber: p[7]?.int, message: clientDataHash,
                                          permission: TokenPrompt.getAssertion, scope: .rpId(rpId),
-                                         silent: silent, now: now())
+                                         silent: silent, epoch: pinEpoch.current, now: now())
         }
 
         let allowList = (p[3]?.array ?? []).compactMap { $0["id"]?.bytes }
@@ -450,6 +471,7 @@ public final class Authenticator {
         } else {
             var signIn = SignInPrompt(rpId: rpId, candidates: candidates)
             signIn.verified = token != nil
+            signIn.confirmByTap = token?.needsTap == true
             let (decision, chosen) = await ui.chooseCredential(signIn)
             try check(decision)
             try Task.checkCancellation()
@@ -502,51 +524,45 @@ public final class Authenticator {
 
     // MARK: clientPIN
 
-    /// getKeyAgreement (3a), the token via Touch ID and getUVRetries (3b).
-    /// The PIN subcommands come in 3c; until then INVALID_SUBCOMMAND.
-    private func clientPIN(_ p: CBOR, session: CTAPSession) async throws -> CBOR {
+    /// getKeyAgreement (3a), the token via Touch ID and getUVRetries (3b),
+    /// and the PIN subcommands (3c, in ClientPin.swift).
+    private func clientPIN(_ p: CBOR, session: CTAPSession) async throws -> CBOR? {
         guard let number = p[1]?.int else { throw CTAPStatus.missingParameter }
         guard let proto = PinUvAuthProtocol(rawValue: number) else { throw CTAPStatus.invalidParameter }
         guard let subCommand = p[2]?.int else { throw CTAPStatus.missingParameter }
         switch subCommand {
+        case 0x01: // getPINRetries
+            return try getPinRetries(session: session)
         case 0x02: // getKeyAgreement
             return .map([.int(1): PinUvAuthProtocol.coseKey(session.keyAgreementKey().publicKey)])
+        case 0x03: // setPIN
+            try await setPin(p, proto: proto, session: session)
+            return nil
+        case 0x04: // changePIN
+            try await changePin(p, proto: proto, session: session)
+            return nil
+        case 0x05: // getPinToken
+            return try await tokenUsingPin(p, proto: proto, session: session, withPermissions: false)
         case 0x06: // getPinUvAuthTokenUsingUvWithPermissions
             return try await tokenUsingTouchID(p, proto: proto, session: session)
         case 0x07: // getUVRetries: iOS counts Touch ID failures itself
             return .map([.int(5): .int(ui.touchIDLocked ? 0 : 8)])
+        case 0x09: // getPinUvAuthTokenUsingPinWithPermissions
+            return try await tokenUsingPin(p, proto: proto, session: session, withPermissions: true)
         default:
             throw CTAPStatus.invalidSubcommand
         }
     }
 
     private func tokenUsingTouchID(_ p: CBOR, proto: PinUvAuthProtocol, session: CTAPSession) async throws -> CBOR {
-        guard p[3] != nil, let permissions = p[9]?.int else { throw CTAPStatus.missingParameter }
-        let platform = try PinUvAuthProtocol.platformKey(p[3])
-        let rpId = p[10]?.text
-        guard permissions != 0 else { throw CTAPStatus.invalidParameter }
-        guard permissions & ~0x07 == 0 else { throw CTAPStatus.unauthorizedPermission }
-        let prompt = TokenPrompt(permissions: UInt8(permissions), rpId: rpId)
-        if prompt.signs, rpId == nil { throw CTAPStatus.missingParameter }
+        guard p[3] != nil else { throw CTAPStatus.missingParameter }
+        let prompt = try Self.tokenPrompt(p)
         if ui.touchIDLocked { throw CTAPStatus.uvBlocked }
-        let shared = try proto.sharedSecret(session.keyAgreementKey(), with: platform)
+        let shared = try sharedSecret(p, proto: proto, session: session)
 
         switch await ui.authorizeToken(prompt) {
         case let .approved(authorization):
-            // Only a token that signs keeps the Touch ID, and only once issued.
-            let kept = prompt.signs ? authorization : nil
-            if kept == nil { authorization?.invalidate() }
-            do {
-                try Task.checkCancellation()
-                let value = random(32)
-                let answer = try proto.encrypt(key: shared, value)
-                session.setToken(CTAPSession.Token(value: value, proto: proto, permissions: prompt.permissions,
-                                                   rpId: rpId, issued: now(), authorization: kept))
-                return .map([.int(2): .bytes(answer)])
-            } catch {
-                kept?.invalidate()
-                throw error
-            }
+            return try issueToken(prompt, proto: proto, shared: shared, session: session, authorization: authorization)
         case .denied:
             throw CTAPStatus.operationDenied
         case .timedOut:
@@ -570,7 +586,8 @@ public final class Authenticator {
             var message = Data([UInt8(truncatingIfNeeded: subCommand)])
             if let rawParams { message += rawParams }
             _ = try session.useToken(param: param, protocolNumber: p[3]?.int, message: message,
-                                     permission: TokenPrompt.credentialManagement, scope: scope, now: now())
+                                     permission: TokenPrompt.credentialManagement, scope: scope,
+                                     epoch: pinEpoch.current, now: now())
         }
         let discoverable = store.allCredentials().filter(\.discoverable)
 
