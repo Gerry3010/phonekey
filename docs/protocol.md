@@ -553,7 +553,9 @@ alone unlocks nothing.
   wrong PIN answers `0x31` (`PIN_INVALID`) and replaces the session's key
   agreement key. Three wrong PINs in a row block only the session: `0x34`
   (`PIN_AUTH_BLOCKED`) until the host reconnects. At 0 retries the PIN is
-  blocked: `0x32` (`PIN_BLOCKED`).
+  blocked: `0x32` (`PIN_BLOCKED`). As in CTAP a try is counted before the
+  comparison; if decrypting the stored hash fails (Touch ID cancelled), nothing
+  was compared and the try is given back.
 - **setPIN** (`0x03`): parameters `keyAgreement`, `newPinEnc` (key 5),
   `pinUvAuthParam` = `authenticate(shared secret, newPinEnc)`. A PIN already
   set: `0x33` (`PIN_AUTH_INVALID`), as CTAP 2.1 §6.5.5.5 says. The phone shows

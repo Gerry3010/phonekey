@@ -243,7 +243,8 @@ extension Authenticator {
 
     /// Compares the offered LEFT(SHA-256(PIN), 16) with the stored one, which
     /// only the Touch ID just given can decrypt. As in CTAP the try is counted
-    /// before the comparison, so cutting the connection never saves one.
+    /// before the comparison, so cutting the connection never saves one; if
+    /// the decryption fails, nothing was compared and the try is given back.
     private func checkPin(_ offered: Data, session: CTAPSession,
                           authorization: TouchIDAuthorization?) async throws {
         guard var record = try pins.loadPin() else { throw CTAPStatus.pinNotSet }
@@ -254,10 +255,12 @@ extension Authenticator {
         do {
             stored = try await keys.decrypt(id: Self.pinKeyId, ciphertext: record.sealedHash,
                                             reason: "Check the PIN", authorization: authorization)
-        } catch let status as CTAPStatus {
-            throw status
         } catch {
-            throw CTAPStatus.operationDenied
+            // Nothing was compared, so nobody learned anything: the try goes
+            // back. A Touch ID that cannot decrypt must not use up the PIN.
+            record.retries += 1
+            try? pins.savePin(record)
+            throw (error as? CTAPStatus) ?? CTAPStatus.operationDenied
         }
         guard stored.count == offered.count,
               zip(stored, offered).reduce(UInt8(0), { $0 | ($1.0 ^ $1.1) }) == 0

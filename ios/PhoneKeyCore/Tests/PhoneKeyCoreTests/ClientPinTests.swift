@@ -278,6 +278,19 @@ final class ClientPinTests: XCTestCase {
         XCTAssertEqual(pins.record?.retries, 8, "a right PIN resets the retries")
     }
 
+    /// Without a comparison nothing is learned, so the try is given back.
+    func testFailedDecryptionKeepsTheTry() async throws {
+        try await setPinOK("1234")
+        keys.denyDecrypt = true
+        var (status, _) = try await pinToken("0000")
+        XCTAssertEqual(status, CTAPStatus.operationDenied.rawValue)
+        XCTAssertEqual(pins.record?.retries, 8)
+        XCTAssertTrue(try XCTUnwrap(ui.pinAuthorizations.last).invalidated)
+        keys.denyDecrypt = false
+        (status, _) = try await pinToken("1234")
+        XCTAssertEqual(status, 0)
+    }
+
     func testPinBlocked() async throws {
         try await setPinOK("1234")
         pins.record?.retries = 1
