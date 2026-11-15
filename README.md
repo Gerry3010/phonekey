@@ -35,17 +35,22 @@ diagrams of every flow is in [docs/how-it-works.de.html](docs/how-it-works.de.ht
   Linux work.
 - **Phase 3a:** `hmac-secret` with PIN/UV auth protocols 1 and 2, for LUKS
   through `systemd-cryptenroll`. Verified in an Ubuntu VM (enroll and unlock a
-  LUKS2 file) and on the iPhone 7 (one Touch ID per unlock).
+  LUKS2 file) and on the iPhone 7 with real Linux (`systemd-cryptenroll`,
+  `systemd-cryptsetup attach`, one Touch ID per unlock).
 - **Phase 3b:** CTAP 2.1 (`FIDO_2_1`) with a `pinUvAuthToken` via Touch ID,
   credential management and `authenticatorSelection`. `fido2-token -L` and `-D`
   list and delete passkeys with Touch ID alone, no PIN. Verified in an Ubuntu
-  VM with libfido2 and python-fido2 against the Simulator.
+  VM with libfido2 and python-fido2 against the Simulator, and on the iPhone 7
+  with real Linux: `fido2-token -L` and `-D`, and Chrome and Firefox signing in
+  through the token with one Touch ID.
 - **Phase 3c:** a PIN for `ssh-keygen -K`, `ssh-add -K` and Chrome's key
   management, which insist on one. It only works together with Touch ID: every
   token issued against the PIN also needs Touch ID on the phone. Set it from the
   computer (`fido2-token -S`) or in the app. Verified in an Ubuntu VM against the
   Simulator (OpenSSH resident and `verify-required` keys with PIN, `-K`, LUKS
-  without PIN).
+  without PIN), and on the iPhone 7 with real Linux: `fido2-token -S` and `-C`,
+  `ssh-keygen -K`, Chrome's key management, LUKS without PIN, and three wrong
+  PINs in a row blocking until the phone reconnects.
 
 The roadmap is in [docs/architecture.md](docs/architecture.md#roadmap).
 
