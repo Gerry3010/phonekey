@@ -9,6 +9,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -89,15 +90,24 @@ func fidoSelftest(ctx context.Context, args []string) error {
 		return err
 	}
 	fmt.Printf("getInfo: %v, AAGUID %x\n", info.Versions, info.AAGUID)
+	// hmac-secret (Phase 3a) adds two sign-ins; older apps skip them.
+	hmacSecret := slices.Contains(info.Extensions, "hmac-secret")
+	steps := 3
+	var extensions map[string]any
+	if hmacSecret {
+		steps = 5
+		extensions = map[string]any{"hmac-secret": true}
+	}
 
 	userID, label, detail := selftestAccount(time.Now())
-	fmt.Printf("\n1/3 Register a passkey for %s: confirm on the phone, then Touch ID.\n", *rpID)
+	fmt.Printf("\n1/%d Register a passkey for %s: confirm on the phone, then Touch ID.\n", steps, *rpID)
 	var mc ctap.MakeCredentialResponse
 	err = ctap.Call(call, ctap.CmdMakeCredential, ctap.MakeCredentialRequest{
 		ClientDataHash: random(32),
 		RP:             ctap.RP{ID: *rpID, Name: "PhoneKey self-test"},
 		User:           ctap.User{ID: userID, Name: label, DisplayName: detail},
 		Params:         []ctap.CredParam{{Alg: -7, Type: "public-key"}},
+		Extensions:     extensions,
 		Options:        map[string]bool{"rk": true},
 	}, &mc)
 	if err != nil {
@@ -118,13 +128,14 @@ func fidoSelftest(ctx context.Context, args []string) error {
 		{reg.Counter == 0, "counter starts at 0"},
 		{bytes.Equal(reg.AAGUID, info.AAGUID), "AAGUID matches getInfo"},
 		{len(reg.CredentialID) == 32 && reg.PublicKey != nil, "credential ID and P-256 public key"},
+		{!hmacSecret || reg.Extensions["hmac-secret"] == true, "hmac-secret confirmed"},
 	} {
 		if err := check(c.ok, c.what); err != nil {
 			return err
 		}
 	}
 
-	fmt.Printf("\n2/3 Sign in with the passkey (no allow list): pick %q, then Touch ID.\n", label)
+	fmt.Printf("\n2/%d Sign in with the passkey (no allow list): pick %q, then Touch ID.\n", steps, label)
 	cdh := random(32)
 	var ga ctap.GetAssertionResponse
 	if err := ctap.Call(call, ctap.CmdGetAssertion, ctap.GetAssertionRequest{RPID: *rpID, ClientDataHash: cdh}, &ga); err != nil {
@@ -147,7 +158,7 @@ func fidoSelftest(ctx context.Context, args []string) error {
 		return err
 	}
 
-	fmt.Println("\n3/3 Sign in with an allow list: confirm, then Touch ID.")
+	fmt.Printf("\n3/%d Sign in with an allow list: confirm, then Touch ID.\n", steps)
 	cdh = random(32)
 	allow := []ctap.Descriptor{{ID: reg.CredentialID, Type: "public-key"}}
 	if err := ctap.Call(call, ctap.CmdGetAssertion, ctap.GetAssertionRequest{RPID: *rpID, ClientDataHash: cdh, Allow: allow}, &ga); err != nil {
@@ -167,8 +178,70 @@ func fidoSelftest(ctx context.Context, args []string) error {
 		return err
 	}
 
+	if hmacSecret {
+		// The same salt must give the same secret (that is what unlocks LUKS),
+		// whichever PIN/UV auth protocol carries it; another salt another one.
+		salt1, salt2 := random(32), random(32)
+		fmt.Printf("\n4/%d hmac-secret, protocol 2, one salt: confirm, then Touch ID.\n", steps)
+		out2, err := selftestHmacSecret(call, *rpID, reg, allow, ctap.PinUvAuthProtocolTwo, salt1)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("\n5/%d hmac-secret, protocol 1, two salts: confirm, then Touch ID.\n", steps)
+		out1, err := selftestHmacSecret(call, *rpID, reg, allow, ctap.PinUvAuthProtocolOne, salt1, salt2)
+		if err != nil {
+			return err
+		}
+		if err := check(bytes.Equal(out1[:32], out2), "same salt, same secret (protocols 1 and 2)"); err != nil {
+			return err
+		}
+		if err := check(!bytes.Equal(out1[32:], out2), "another salt, another secret"); err != nil {
+			return err
+		}
+	} else {
+		fmt.Println("\n(hmac-secret skipped: this PhoneKey does not offer it yet)")
+	}
+
 	fmt.Printf("\nPASS. The test passkey %q stays on the phone. The next self-test from this computer replaces it; to remove it, use PhoneKey → Passkeys & security keys.\n", label)
 	return nil
+}
+
+// selftestHmacSecret signs in with the hmac-secret extension and returns the
+// decrypted output: 32 bytes per salt.
+func selftestHmacSecret(call ctap.Transport, rpID string, reg *ctap.AuthData, allow []ctap.Descriptor,
+	p ctap.PinUvAuthProtocol, salts ...[]byte) ([]byte, error) {
+	platform, shared, err := ctap.KeyAgreement(call, p)
+	if err != nil {
+		return nil, err
+	}
+	in, err := ctap.NewHmacSecretInput(p, platform, shared, salts...)
+	if err != nil {
+		return nil, err
+	}
+	cdh := make([]byte, 32)
+	rand.Read(cdh)
+	var ga ctap.GetAssertionResponse
+	err = ctap.Call(call, ctap.CmdGetAssertion, ctap.GetAssertionRequest{
+		RPID: rpID, ClientDataHash: cdh, Allow: allow,
+		Extensions: map[string]any{"hmac-secret": in},
+	}, &ga)
+	if err != nil {
+		return nil, err
+	}
+	a, err := ctap.VerifyAssertion(reg.PublicKey, rpID, cdh, &ga)
+	if err != nil {
+		return nil, errors.New("FAIL: " + err.Error())
+	}
+	sealed, ok := a.Extensions["hmac-secret"].([]byte)
+	if !ok {
+		return nil, errors.New("FAIL: no hmac-secret output in the assertion")
+	}
+	out, err := p.Decrypt(shared, sealed)
+	if err != nil || len(out) != 32*len(salts) {
+		return nil, fmt.Errorf("FAIL: hmac-secret output (%d bytes, %v)", len(out), err)
+	}
+	fmt.Printf("  ok: signature over the extension, %d-byte secret\n", len(out))
+	return out, nil
 }
 
 // selftestAccount names the test account after this computer, the same name

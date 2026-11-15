@@ -97,7 +97,9 @@ Then:
   For `verify-required` keys OpenSSH asks for a PIN: just press Enter, Touch ID
   is the verification.
 - **Diagnostics without Linux:** `phonekey fido info` and `phonekey fido selftest`
-  work on macOS too and check the phone's authenticator from the host side.
+  work on macOS too and check the phone's authenticator from the host side. If
+  the phone offers `hmac-secret`, the self-test also checks it with both PIN/UV
+  auth protocols: the same salt must give the same secret (what unlocks LUKS).
 
 Not supported yet: listing resident keys (`ssh-keygen -K`, browser key
 management), `hmac-secret` (LUKS via `systemd-cryptenroll`), U2F-only sites, PINs.
