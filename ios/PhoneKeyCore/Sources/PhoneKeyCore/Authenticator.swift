@@ -23,13 +23,16 @@ public enum CTAPStatus: UInt8, Error {
     case notAllowed = 0x30
     case pinAuthInvalid = 0x33
     case pinNotSet = 0x35
+    case puatRequired = 0x36
+    case uvBlocked = 0x3C
     case invalidSubcommand = 0x3E
+    case unauthorizedPermission = 0x40
     case other = 0x7F
 }
 
 /// A credential as the phone stores it. The private key lives elsewhere
 /// (Secure Enclave), named by `id`.
-public struct StoredCredential: Codable, Equatable, Identifiable {
+public struct StoredCredential: Codable, Equatable, Identifiable, Sendable {
     public var id: Data
     public var rpId: String
     public var rpName: String?
@@ -85,6 +88,12 @@ public protocol CredentialStore: AnyObject {
     func save(_ credential: StoredCredential, replacing: [Data]) throws
     /// Increments and returns the new counter.
     func incrementCounter(id: Data) throws -> UInt32
+    /// Every stored credential (credential management).
+    func allCredentials() -> [StoredCredential]
+    /// Replaces the stored credential with the same ID.
+    func update(_ credential: StoredCredential) throws
+    /// Removes the metadata; the caller deletes the key.
+    func delete(id: Data) throws
 }
 
 /// Creates and uses P-256 keys. In the app: Secure Enclave, Touch ID per signature.
@@ -92,13 +101,18 @@ public protocol CredentialKeys: AnyObject {
     /// Creates a key named `id` and returns its public key (x963, 65 bytes).
     func createKey(id: Data) throws -> Data
     /// Signs `data` (ECDSA P-256 SHA-256, DER). May ask for Touch ID; throws
-    /// CTAPStatus.operationDenied when the user declines.
-    func sign(id: Data, data: Data, reason: String) async throws -> Data
+    /// CTAPStatus.operationDenied when the user declines. `authorization` is
+    /// the Touch ID of a pinUvAuthToken (from `AuthenticatorUI.authorizeToken`):
+    /// with it, no new prompt; it serves this one operation and is used up.
+    func sign(id: Data, data: Data, reason: String, authorization: AnyObject?) async throws -> Data
     /// Encrypts to a public key (x963) with ECIES. Needs no Touch ID.
     func encrypt(toPublicKey x963: Data, plaintext: Data) throws -> Data
     /// Decrypts with the key. Like `sign`, it needs Touch ID; within one
-    /// sign-in the same Touch ID covers both (docs/protocol.md §10).
-    func decrypt(id: Data, ciphertext: Data, reason: String) async throws -> Data
+    /// sign-in the same Touch ID covers both (docs/protocol.md §10). Called
+    /// before `sign` in the same request, so it leaves `authorization` alive.
+    func decrypt(id: Data, ciphertext: Data, reason: String, authorization: AnyObject?) async throws -> Data
+    /// The public key (x963) of a stored key, without Touch ID.
+    func publicKey(id: Data) throws -> Data
     func deleteKey(id: Data)
 }
 
@@ -114,11 +128,40 @@ public struct RegistrationPrompt: Equatable {
     public let userName: String?
     public let userDisplayName: String?
     public let passkey: Bool
+    /// A pinUvAuthToken already carried the Touch ID: nothing to ask, only
+    /// to note for the confirmation.
+    public var verified = false
 }
 
 public struct SignInPrompt: Equatable {
     public let rpId: String
     public let candidates: [StoredCredential]
+    /// A pinUvAuthToken already carried the Touch ID: with one candidate
+    /// nothing to ask, with several only which account (a tap).
+    public var verified = false
+}
+
+/// getPinUvAuthTokenUsingUvWithPermissions: what the token is for.
+public struct TokenPrompt: Equatable {
+    public static let makeCredential: UInt8 = 0x01
+    public static let getAssertion: UInt8 = 0x02
+    public static let credentialManagement: UInt8 = 0x04
+
+    public let permissions: UInt8
+    public let rpId: String?
+
+    /// Registering or signing in: the token's Touch ID must also unlock a
+    /// signature, so it is evaluated for the keys' rule (§10).
+    public var signs: Bool { permissions & (Self.makeCredential | Self.getAssertion) != 0 }
+}
+
+public enum TokenDecision {
+    /// `authorization` unlocks one key operation when the token signs.
+    case approved(authorization: AnyObject?)
+    case denied
+    case timedOut
+    /// iOS has locked Touch ID after failed attempts.
+    case blocked
 }
 
 /// The phone's screen. Implementations must return promptly when the calling
@@ -132,10 +175,16 @@ public protocol AuthenticatorUI: AnyObject {
     func acknowledgeExcluded(rpId: String) async -> UserDecision
     /// Authenticator selection: waits for a tap.
     func confirmSelection() async -> UserDecision
+    /// A pinUvAuthToken via Touch ID: shows host, site and purpose, asks.
+    func authorizeToken(_ prompt: TokenPrompt) async -> TokenDecision
+    /// Credential management deletes a passkey: shows it, waits for a tap.
+    func confirmDeletion(_ credential: StoredCredential) async -> UserDecision
+    /// iOS has locked Touch ID after failed attempts.
+    var touchIDLocked: Bool { get }
 }
 
-/// A CTAP 2.0 authenticator with Phase 3a: PIN/UV auth protocols and
-/// `hmac-secret` (docs/protocol.md §10).
+/// A CTAP 2.1 authenticator without a PIN (docs/protocol.md §10, steps 3a
+/// and 3b): `hmac-secret`, pinUvAuthToken via Touch ID, credential management.
 public final class Authenticator {
     public static let aaguid = Data([
         0x4E, 0x3B, 0x1F, 0xE3, 0xC7, 0x5C, 0x40, 0x55, 0xB7, 0x91, 0xC9, 0x99, 0xFF, 0x91, 0x59, 0x51,
@@ -154,19 +203,24 @@ public final class Authenticator {
         case clientPIN = 0x06
         case reset = 0x07
         case getNextAssertion = 0x08
+        case credentialManagement = 0x0A
+        case selection = 0x0B
     }
 
     private let store: CredentialStore
     private let keys: CredentialKeys
     private let ui: AuthenticatorUI
     private let random: (Int) -> Data
+    private let now: () -> Date
 
     public init(store: CredentialStore, keys: CredentialKeys, ui: AuthenticatorUI,
-                random: @escaping (Int) -> Data = { n in Data((0..<n).map { _ in UInt8.random(in: 0...255) }) }) {
+                random: @escaping (Int) -> Data = { n in Data((0..<n).map { _ in UInt8.random(in: 0...255) }) },
+                now: @escaping () -> Date = Date.init) {
         self.store = store
         self.keys = keys
         self.ui = ui
         self.random = random
+        self.now = now
     }
 
     /// Handles one CTAPHID CBOR message (command byte + parameters) from the
@@ -175,24 +229,31 @@ public final class Authenticator {
     public func handle(_ message: Data, session: CTAPSession) async -> Data {
         guard let byte = message.first else { return Data([CTAPStatus.invalidLength.rawValue]) }
         let params = Data(message.dropFirst())
+        // Any other command ends a credential management enumeration.
+        if byte != Command.credentialManagement.rawValue { session.endEnumeration() }
         do {
-            let response: CBOR
+            let response: CBOR?
             switch Command(rawValue: byte) {
             case .getInfo:
                 response = getInfo()
             case .makeCredential:
-                response = try await makeCredential(try Self.parameters(params))
+                response = try await makeCredential(try Self.parameters(params), session: session)
             case .getAssertion:
                 response = try await getAssertion(try Self.parameters(params), session: session)
             case .clientPIN:
-                response = try clientPIN(try Self.parameters(params), session: session)
+                response = try await clientPIN(try Self.parameters(params), session: session)
+            case .credentialManagement:
+                response = try await credentialManagement(try Self.parameters(params), session: session)
+            case .selection:
+                try check(await ui.confirmSelection())
+                response = nil
             case .getNextAssertion, .reset:
                 throw CTAPStatus.notAllowed
             case nil:
                 throw CTAPStatus.invalidCommand
             }
             try Task.checkCancellation()
-            return Data([CTAPStatus.ok.rawValue]) + response.encoded
+            return Data([CTAPStatus.ok.rawValue]) + (response?.encoded ?? Data())
         } catch let status as CTAPStatus {
             return Data([status.rawValue])
         } catch is CancellationError {
@@ -218,23 +279,26 @@ public final class Authenticator {
 
     func getInfo() -> CBOR {
         .map([
-            .int(1): .array([.text("FIDO_2_0")]),
+            .int(1): .array([.text("FIDO_2_0"), .text("FIDO_2_1")]),
             .int(2): .array([.text("credProtect"), .text("hmac-secret")]),
             .int(3): .bytes(Self.aaguid),
             .int(4): .map([.text("rk"): .bool(true), .text("up"): .bool(true),
-                           .text("uv"): .bool(true), .text("plat"): .bool(false)]),
+                           .text("uv"): .bool(true), .text("plat"): .bool(false),
+                           .text("pinUvAuthToken"): .bool(true), .text("credMgmt"): .bool(true)]),
             .int(5): .int(Self.maxMessageSize),
             .int(6): .array([.int(2), .int(1)]),
             .int(7): .int(Self.maxCredentialCountInList),
             .int(8): .int(Self.credentialIdLength),
             .int(9): .array([.text("usb")]),
             .int(10): .array([.map([.text("alg"): .int(-7), .text("type"): .text("public-key")])]),
+            .int(17): .int(1), // preferredPlatformUvAttempts: Touch ID retries on its own
+            .int(18): .int(2), // uvModality: fingerprint
         ])
     }
 
     // MARK: makeCredential
 
-    private func makeCredential(_ p: CBOR) async throws -> CBOR {
+    private func makeCredential(_ p: CBOR, session: CTAPSession) async throws -> CBOR {
         let clientDataHash = try required(p[1]?.bytes)
         guard let rp = p[2], rp.isMap, let user = p[3], user.isMap else { throw CTAPStatus.missingParameter }
         let rpId = try required(rp["id"]?.text)
@@ -249,10 +313,19 @@ public final class Authenticator {
         let credProtect = p[6]?["credProtect"]?.int.flatMap { (1...3).contains($0) ? $0 : nil }
         let wantsHmacSecret = p[6]?["hmac-secret"]?.bool == true
 
+        var token: CTAPSession.TokenUse?
+        // The token's mc/ga permissions serve this one operation, whatever
+        // its outcome (CTAP 2.1 clears them on success; declining too).
+        defer { if token != nil { session.consumeSigningPermissions() } }
         if let pinAuth = p[8] {
-            guard pinAuth.bytes?.isEmpty == true else { throw CTAPStatus.pinAuthInvalid }
-            try check(await ui.confirmSelection())
-            throw CTAPStatus.pinNotSet
+            guard let param = pinAuth.bytes else { throw CTAPStatus.invalidParameter }
+            if param.isEmpty {
+                // Zero length: authenticator selection.
+                try check(await ui.confirmSelection())
+                throw CTAPStatus.pinNotSet
+            }
+            token = try session.useToken(param: param, protocolNumber: p[9]?.int, message: clientDataHash,
+                                         permission: TokenPrompt.makeCredential, scope: .rpId(rpId), now: now())
         }
 
         guard params.contains(where: { $0["alg"]?.int == -7 && $0["type"]?.text == "public-key" }) else {
@@ -267,9 +340,11 @@ public final class Authenticator {
             throw CTAPStatus.credentialExcluded
         }
 
-        try check(await ui.confirmRegistration(RegistrationPrompt(
+        var registration = RegistrationPrompt(
             rpId: rpId, rpName: rp["name"]?.text, userName: user["name"]?.text,
-            userDisplayName: user["displayName"]?.text, passkey: passkey)))
+            userDisplayName: user["displayName"]?.text, passkey: passkey)
+        registration.verified = token != nil
+        try check(await ui.confirmRegistration(registration))
         try Task.checkCancellation()
 
         let credentialId = random(Self.credentialIdLength)
@@ -322,7 +397,6 @@ public final class Authenticator {
         if !extensions.isEmpty {
             authData += CBOR.map(extensions).encoded
         }
-        _ = clientDataHash // not signed with attestation "none"
 
         return .map([
             .int(1): .text("none"),
@@ -336,11 +410,17 @@ public final class Authenticator {
     private func getAssertion(_ p: CBOR, session: CTAPSession) async throws -> CBOR {
         let rpId = try required(p[1]?.text)
         let clientDataHash = try required(p[2]?.bytes)
+        var token: CTAPSession.TokenUse?
+        defer { if token != nil { session.consumeSigningPermissions() } }
         if let pinAuth = p[6] {
-            // Zero length: authenticator selection, as for makeCredential.
-            guard pinAuth.bytes?.isEmpty == true else { throw CTAPStatus.pinAuthInvalid }
-            try check(await ui.confirmSelection())
-            throw CTAPStatus.pinNotSet
+            guard let param = pinAuth.bytes else { throw CTAPStatus.invalidParameter }
+            if param.isEmpty {
+                // Zero length: authenticator selection, as for makeCredential.
+                try check(await ui.confirmSelection())
+                throw CTAPStatus.pinNotSet
+            }
+            token = try session.useToken(param: param, protocolNumber: p[7]?.int, message: clientDataHash,
+                                         permission: TokenPrompt.getAssertion, scope: .rpId(rpId), now: now())
         }
 
         let allowList = (p[3]?.array ?? []).compactMap { $0["id"]?.bytes }
@@ -358,7 +438,9 @@ public final class Authenticator {
         // Checked before anything is shown, so a bad request never prompts.
         let hmacRequest = try p[4]?["hmac-secret"].map { try HmacSecretRequest($0, session: session) }
 
-        let (decision, chosen) = await ui.chooseCredential(SignInPrompt(rpId: rpId, candidates: candidates))
+        var signIn = SignInPrompt(rpId: rpId, candidates: candidates)
+        signIn.verified = token != nil
+        let (decision, chosen) = await ui.chooseCredential(signIn)
         try check(decision)
         try Task.checkCancellation()
         guard let credential = chosen, candidates.contains(where: { $0.id == credential.id }) else {
@@ -371,7 +453,8 @@ public final class Authenticator {
             let credRandom: Data
             do {
                 credRandom = try await keys.decrypt(id: credential.id, ciphertext: sealed,
-                                                    reason: "Sign in to \(rpId)")
+                                                    reason: "Sign in to \(rpId)",
+                                                    authorization: token?.authorization)
             } catch let status as CTAPStatus {
                 throw status
             } catch {
@@ -389,7 +472,7 @@ public final class Authenticator {
             authData += CBOR.map(extensions).encoded
         }
         let signature = try await keys.sign(id: credential.id, data: authData + clientDataHash,
-                                            reason: "Sign in to \(rpId)")
+                                            reason: "Sign in to \(rpId)", authorization: token?.authorization)
 
         var response: [CBOR.Pair] = [
             .init(.int(1), .map([.text("id"): .bytes(credential.id), .text("type"): .text("public-key")])),
@@ -407,18 +490,152 @@ public final class Authenticator {
 
     // MARK: clientPIN
 
-    /// Phase 3a: only getKeyAgreement. The PIN subcommands come in 3c, the
-    /// token via Touch ID in 3b; until then they answer INVALID_SUBCOMMAND.
-    private func clientPIN(_ p: CBOR, session: CTAPSession) throws -> CBOR {
+    /// getKeyAgreement (3a), the token via Touch ID and getUVRetries (3b).
+    /// The PIN subcommands come in 3c; until then INVALID_SUBCOMMAND.
+    private func clientPIN(_ p: CBOR, session: CTAPSession) async throws -> CBOR {
         guard let number = p[1]?.int else { throw CTAPStatus.missingParameter }
-        guard PinUvAuthProtocol(rawValue: number) != nil else { throw CTAPStatus.invalidParameter }
+        guard let proto = PinUvAuthProtocol(rawValue: number) else { throw CTAPStatus.invalidParameter }
         guard let subCommand = p[2]?.int else { throw CTAPStatus.missingParameter }
         switch subCommand {
         case 0x02: // getKeyAgreement
             return .map([.int(1): PinUvAuthProtocol.coseKey(session.keyAgreementKey().publicKey)])
+        case 0x06: // getPinUvAuthTokenUsingUvWithPermissions
+            return try await tokenUsingTouchID(p, proto: proto, session: session)
+        case 0x07: // getUVRetries: iOS counts Touch ID failures itself
+            return .map([.int(5): .int(ui.touchIDLocked ? 0 : 8)])
         default:
             throw CTAPStatus.invalidSubcommand
         }
+    }
+
+    private func tokenUsingTouchID(_ p: CBOR, proto: PinUvAuthProtocol, session: CTAPSession) async throws -> CBOR {
+        guard p[3] != nil, let permissions = p[9]?.int else { throw CTAPStatus.missingParameter }
+        let platform = try PinUvAuthProtocol.platformKey(p[3])
+        let rpId = p[10]?.text
+        guard permissions != 0 else { throw CTAPStatus.invalidParameter }
+        guard permissions & ~0x07 == 0 else { throw CTAPStatus.unauthorizedPermission }
+        let prompt = TokenPrompt(permissions: UInt8(permissions), rpId: rpId)
+        if prompt.signs, rpId == nil { throw CTAPStatus.missingParameter }
+        if ui.touchIDLocked { throw CTAPStatus.uvBlocked }
+        let shared = try proto.sharedSecret(session.keyAgreementKey(), with: platform)
+
+        switch await ui.authorizeToken(prompt) {
+        case let .approved(authorization):
+            try Task.checkCancellation()
+            let value = random(32)
+            session.setToken(CTAPSession.Token(value: value, permissions: prompt.permissions, rpId: rpId,
+                                               issued: now(), authorization: prompt.signs ? authorization : nil))
+            return .map([.int(2): .bytes(try proto.encrypt(key: shared, value))])
+        case .denied:
+            throw CTAPStatus.operationDenied
+        case .timedOut:
+            throw CTAPStatus.userActionTimeout
+        case .blocked:
+            throw CTAPStatus.uvBlocked
+        }
+    }
+
+    // MARK: credentialManagement
+
+    /// Lists and deletes discoverable credentials with a token that has the
+    /// `cm` permission (§10). Only `deleteCredential` asks on the phone.
+    private func credentialManagement(_ p: CBOR, session: CTAPSession) async throws -> CBOR? {
+        guard let subCommand = p[1]?.int else { throw CTAPStatus.missingParameter }
+        let params = p[2]
+        func authorize(_ scope: CTAPSession.TokenScope) throws {
+            guard let param = p[4]?.bytes else { throw CTAPStatus.puatRequired }
+            var message = Data([UInt8(truncatingIfNeeded: subCommand)])
+            if let params { message += params.encoded }
+            _ = try session.useToken(param: param, protocolNumber: p[3]?.int, message: message,
+                                     permission: TokenPrompt.credentialManagement, scope: scope, now: now())
+        }
+        let discoverable = store.allCredentials().filter(\.discoverable)
+
+        switch subCommand {
+        case 0x01: // getCredsMetadata
+            try authorize(.unscoped)
+            session.endEnumeration()
+            return .map([.int(1): .int(discoverable.count), .int(2): .int(100)])
+
+        case 0x02: // enumerateRPsBegin
+            try authorize(.unscoped)
+            let sites = Dictionary(grouping: discoverable, by: \.rpId)
+                .map { CTAPSession.Site(id: $0.key, name: $0.value.lazy.compactMap(\.rpName).first) }
+                .sorted { $0.id < $1.id }
+            guard let first = sites.first else { session.endEnumeration(); throw CTAPStatus.noCredentials }
+            session.beginEnumeration(sites: Array(sites.dropFirst()))
+            return .map(Self.siteEntry(first) + [.init(.int(5), .int(sites.count))])
+
+        case 0x03: // enumerateRPsGetNextRP
+            guard let site = session.nextSite() else { throw CTAPStatus.notAllowed }
+            return .map(Self.siteEntry(site))
+
+        case 0x04: // enumerateCredentialsBegin
+            guard let rpIdHash = params?[1]?.bytes else { throw CTAPStatus.missingParameter }
+            try authorize(.rpIdHash(rpIdHash))
+            let credentials = discoverable.filter { Self.rpIdHash($0.rpId) == rpIdHash }
+                .sorted { $0.created < $1.created }
+            guard let first = credentials.first else { session.endEnumeration(); throw CTAPStatus.noCredentials }
+            let entry = try credentialEntry(first) + [.init(.int(9), .int(credentials.count))]
+            session.beginEnumeration(credentials: Array(credentials.dropFirst()))
+            return .map(entry)
+
+        case 0x05: // enumerateCredentialsGetNextCredential
+            guard let credential = session.nextCredential() else { throw CTAPStatus.notAllowed }
+            return .map(try credentialEntry(credential))
+
+        case 0x06: // deleteCredential
+            session.endEnumeration()
+            guard let id = params?[2]?["id"]?.bytes else { throw CTAPStatus.missingParameter }
+            // The token first, so only an authorised host learns whether the ID exists.
+            let found = store.credential(id: id).flatMap { $0.discoverable ? $0 : nil }
+            try authorize(found.map { .rpId($0.rpId) } ?? .any)
+            guard let credential = found else { throw CTAPStatus.noCredentials }
+            // Deleting is final and keys have no backup: the phone asks.
+            try check(await ui.confirmDeletion(credential))
+            try store.delete(id: id)
+            keys.deleteKey(id: id)
+            return nil
+
+        case 0x07: // updateUserInformation
+            session.endEnumeration()
+            guard let id = params?[2]?["id"]?.bytes, let user = params?[3], user.isMap else {
+                throw CTAPStatus.missingParameter
+            }
+            let found = store.credential(id: id).flatMap { $0.discoverable ? $0 : nil }
+            try authorize(found.map { .rpId($0.rpId) } ?? .any)
+            guard var credential = found else { throw CTAPStatus.noCredentials }
+            guard user["id"]?.bytes == credential.userId else { throw CTAPStatus.invalidParameter }
+            credential.userName = user["name"]?.text
+            credential.userDisplayName = user["displayName"]?.text
+            try store.update(credential)
+            return nil
+
+        default:
+            session.endEnumeration()
+            throw CTAPStatus.invalidSubcommand
+        }
+    }
+
+    private static func siteEntry(_ site: CTAPSession.Site) -> [CBOR.Pair] {
+        var rp: [CBOR.Pair] = [.init(.text("id"), .text(site.id))]
+        if let name = site.name { rp.append(.init(.text("name"), .text(name))) }
+        return [.init(.int(3), .map(rp)), .init(.int(4), .bytes(rpIdHash(site.id)))]
+    }
+
+    /// user as the site stored it (names given on the phone stay there),
+    /// credential ID, public key and credProtect.
+    private func credentialEntry(_ credential: StoredCredential) throws -> [CBOR.Pair] {
+        var user: [CBOR.Pair] = [.init(.text("id"), .bytes(credential.userId))]
+        if let name = credential.userName { user.append(.init(.text("name"), .text(name))) }
+        if let display = credential.userDisplayName { user.append(.init(.text("displayName"), .text(display))) }
+        var entry: [CBOR.Pair] = [
+            .init(.int(6), .map(user)),
+            .init(.int(7), .map([.text("id"): .bytes(credential.id), .text("type"): .text("public-key")])),
+            .init(.int(8), Self.coseKey(x963: try keys.publicKey(id: credential.id))),
+        ]
+        if let credProtect = credential.credProtect { entry.append(.init(.int(10), .int(credProtect))) }
+        return entry
     }
 
     /// A checked `hmac-secret` input of getAssertion (CTAP 2.1 §12.5).

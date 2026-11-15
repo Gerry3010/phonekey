@@ -36,6 +36,10 @@ diagrams of every flow is in [docs/how-it-works.de.html](docs/how-it-works.de.ht
 - **Phase 3a:** `hmac-secret` with PIN/UV auth protocols 1 and 2, for LUKS
   through `systemd-cryptenroll`. Verified in an Ubuntu VM (enroll and unlock a
   LUKS2 file) and on the iPhone 7 (one Touch ID per unlock).
+- **Phase 3b:** CTAP 2.1 (`FIDO_2_1`) with a `pinUvAuthToken` via Touch ID,
+  credential management and `authenticatorSelection`. `fido2-token -L` and `-D`
+  list and delete passkeys with Touch ID alone, no PIN. Verified in an Ubuntu
+  VM with libfido2 and python-fido2 against the Simulator.
 
 The roadmap is in [docs/architecture.md](docs/architecture.md#roadmap).
 

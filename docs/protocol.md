@@ -588,8 +588,10 @@ From 3b, a makeCredential or getAssertion with a non-empty `pinUvAuthParam`:
   getAssertion) with Sign in and Other account, one tap and no second
   Touch ID. A token without an RP ID (`0x05`) first shows the site and waits
   for a tap. `excludeList` hits work as above.
-- Afterwards the token keeps no permissions for `mc` and `ga` (CTAP 2.1); a new
-  operation needs a new token and a new Touch ID.
+- Afterwards the token keeps no permissions for `mc` and `ga` (CTAP 2.1), and
+  its Touch ID is dropped. This holds whatever the outcome, also after Decline,
+  a timeout or `NO_CREDENTIALS`: a new operation needs a new token and a new
+  Touch ID.
 
 A `pinUvAuthParam` together with `options.uv = true` is treated as if `uv` were
 absent.
@@ -601,7 +603,10 @@ Lists and deletes **discoverable** credentials. Parameters: `subCommand`
 `pinUvAuthParam` (key 4). The subcommands that need it verify `pinUvAuthParam`
 over `subCommand || subCommandParams` (CBOR) with a token that has the `cm`
 permission; failure: `0x33`. A token with an RP ID only reaches that RP;
-`getCredsMetadata` and `enumerateRPsBegin` need a token without one.
+`getCredsMetadata` and `enumerateRPsBegin` need a token without one. Unlike
+makeCredential and getAssertion, credential management never binds a token
+without an RP ID to a site. The token is checked before a credential ID is
+looked up, so a host without one cannot probe which IDs exist.
 
 | subCommand | Auth | Phone |
 |---|---|---|
@@ -610,8 +615,8 @@ permission; failure: `0x33`. A token with an RP ID only reaches that RP;
 | `0x03` enumerateRPsGetNextRP | no | `{3: rp, 4: rpIDHash}`; past the end or without a begin: `0x30` |
 | `0x04` enumerateCredentialsBegin | yes | params `{1: rpIDHash}`. `{6: user, 7: credentialID, 8: publicKey, 9: totalCredentials, 10: credProtect}`, `user` as the site stored it, `credProtect` only if stored. None: `0x2E`. |
 | `0x05` enumerateCredentialsGetNextCredential | no | as begin without `9`; past the end or without a begin: `0x30` |
-| `0x06` deleteCredential | yes | params `{2: credentialID}`. The phone shows site and account and waits for a tap: deleting is final, keys are not backed up. Declined: `0x27`; 60 s: `0x2F`; unknown: `0x2E`. Deletes the credential and its Secure Enclave key. |
-| `0x07` updateUserInformation | yes | params `{2: credentialID, 3: user}`. `user.id` must match, else `0x02`. Replaces `name` and `displayName`, no prompt. |
+| `0x06` deleteCredential | yes | params `{2: credentialID}`. The phone shows site and account and waits for a tap: deleting is final, keys are not backed up. Declined: `0x27`; 60 s: `0x2F`; unknown or not discoverable: `0x2E`. Deletes the credential and its Secure Enclave key. |
+| `0x07` updateUserInformation | yes | params `{2: credentialID, 3: user}`. Unknown or not discoverable: `0x2E`. `user.id` must match, else `0x02`. Replaces `name` and `displayName`, no prompt. |
 
 Any other command ends an enumeration. `0x41` (the CTAP 2.1 pre-release
 command) answers `0x01` (`INVALID_COMMAND`).

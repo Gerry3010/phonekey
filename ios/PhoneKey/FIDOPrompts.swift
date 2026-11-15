@@ -19,6 +19,19 @@ final class FIDOPrompts: ObservableObject {
         case signIn(SignInPrompt)
         case excluded(rpId: String)
         case selection
+        /// getPinUvAuthTokenUsingUvWithPermissions (3b): Touch ID for a token.
+        case token(TokenPrompt)
+        /// Credential management deletes a passkey: a tap.
+        case deletion(StoredCredential)
+    }
+
+    /// How a prompt ended. `authorization` is a token's Touch ID that may
+    /// sign once; `blocked` means iOS locked Touch ID during a token prompt.
+    struct Outcome {
+        var decision: UserDecision
+        var credential: StoredCredential?
+        var authorization: LAContext?
+        var blocked = false
     }
 
     struct Active: Identifiable {
@@ -53,7 +66,7 @@ final class FIDOPrompts: ObservableObject {
     var credentials: KeychainCredentialStore?
 
     private var nextId = 0
-    private var continuation: CheckedContinuation<(UserDecision, StoredCredential?), Never>?
+    private var continuation: CheckedContinuation<Outcome, Never>?
     private var cancelledBeforeShown: Set<Int> = []
     private var timeoutTask: Task<Void, Never>?
     private var authContext: LAContext?
@@ -86,21 +99,25 @@ final class FIDOPrompts: ObservableObject {
     private func authenticate(forSigning: Bool) {
         guard let active, !authenticating else { return }
         let reason: String
-        var isSignIn = false
+        var signs = false
         switch active.kind {
         case let .registration(prompt):
             reason = prompt.passkey ? "Create a passkey for \(prompt.rpId)" : "Register this key with \(prompt.rpId)"
         case let .signIn(prompt):
-            guard let chosen else { return }
+            // A token already carried the Touch ID: the card only picks the account.
+            guard let chosen, !prompt.verified else { return }
             reason = "Sign in to \(prompt.rpId) as \(chosen.accountLabel)"
-            isSignIn = true
-        case .excluded, .selection:
+            signs = true
+        case let .token(prompt):
+            reason = Self.tokenPurpose(prompt)
+            signs = prompt.signs
+        case .excluded, .selection, .deletion:
             return
         }
         #if targetEnvironment(simulator)
         let access: SecAccessControl? = nil
         #else
-        let access = forSigning && isSignIn ? try? SecureEnclaveKeys.accessControl() : nil
+        let access = forSigning && signs ? try? SecureEnclaveKeys.accessControl() : nil
         #endif
 
         let context = LAContext()
@@ -150,12 +167,40 @@ final class FIDOPrompts: ObservableObject {
         }
     }
 
-    /// Sign-in with several accounts: picks one from the list and opens Touch ID.
+    /// What a token is for, in the card and the Touch ID sheet.
+    static func tokenPurpose(_ prompt: TokenPrompt) -> String {
+        let site = prompt.rpId ?? "a site"
+        switch prompt.permissions & (TokenPrompt.makeCredential | TokenPrompt.getAssertion) {
+        case TokenPrompt.makeCredential: return "Register at \(site)"
+        case TokenPrompt.getAssertion: return "Sign in to \(site)"
+        case 0: return "List and delete passkeys on this iPhone"
+        default: return "Register or sign in at \(site)"
+        }
+    }
+
+    /// Sign-in with several accounts: picks one from the list and opens Touch ID
+    /// (or, when a token already verified, signs in with it right away).
     func choose(_ credential: StoredCredential) {
-        guard case .signIn = active?.kind, !authenticating else { return }
+        guard case let .signIn(prompt) = active?.kind, !authenticating else { return }
         chosen = credential
         pickingAccount = false
-        authenticate()
+        if prompt.verified {
+            approve(with: nil)
+        } else {
+            authenticate()
+        }
+    }
+
+    /// Sign-in after a token's Touch ID: the tap on "Sign in".
+    func signInVerified() {
+        guard case let .signIn(prompt) = active?.kind, prompt.verified, chosen != nil else { return }
+        approve(with: nil)
+    }
+
+    /// Credential management: the tap on "Delete".
+    func confirmDeletionTap() {
+        guard case .deletion = active?.kind else { return }
+        approve(with: nil)
     }
 
     /// Sign-in with several accounts: shows the list.
@@ -221,7 +266,8 @@ final class FIDOPrompts: ObservableObject {
         finish(.denied, nil)
     }
 
-    private func approve(with context: LAContext) {
+    /// `context` is the Touch ID just given, nil for a tap.
+    private func approve(with context: LAContext?) {
         guard let active else { return }
         switch active.kind {
         case let .registration(prompt):
@@ -233,13 +279,35 @@ final class FIDOPrompts: ObservableObject {
                 pendingQuestion = SuggestionQuestion.after(signingInWith: chosen, preselectedId: preselectedId,
                                                            candidates: prompt.candidates, rpId: prompt.rpId)
             }
-            // The signature reuses this Touch ID instead of asking again.
-            authContext = nil
-            handoff?.put(context)
+            if let context {
+                // The signature reuses this Touch ID instead of asking again.
+                authContext = nil
+                handoff?.put(context)
+            }
             finish(.approved, chosen)
+        case let .token(prompt):
+            // A token that signs keeps this Touch ID for its one operation;
+            // a cm-only token keeps none.
+            authContext = nil
+            if prompt.signs {
+                finish(.approved, nil, authorization: context)
+            } else {
+                context?.invalidate()
+                finish(.approved, nil)
+            }
+        case let .deletion(credential):
+            approvedSummary = "Deleted \(credential.accountLabel) from \(credential.rpId)"
+            finish(.approved, nil)
         case .excluded, .selection:
             finish(.approved, nil)
         }
+    }
+
+    /// A token's Touch ID covered a registration or a single sign-in: nothing
+    /// to show now, only the confirmation once the answer has gone out.
+    private func noteVerified(_ summary: String) {
+        approvedSummary = summary
+        pendingQuestion = nil
     }
 
     private func touchIDDidNotSucceed(_ error: LAError?) {
@@ -247,6 +315,11 @@ final class FIDOPrompts: ObservableObject {
         case .biometryNotEnrolled, .biometryNotAvailable:
             note = "Set up Touch ID in Settings first."
         case .biometryLockout:
+            if case .token = active?.kind {
+                // A token request answers UV_BLOCKED right away (§10).
+                finish(.denied, nil, blocked: true)
+                return
+            }
             note = "Touch ID is locked. Unlock the iPhone with its passcode, then try again."
         case .authenticationFailed:
             note = "Touch ID did not recognise the finger."
@@ -258,7 +331,7 @@ final class FIDOPrompts: ObservableObject {
 
     // MARK: Presenting (called from the authenticator's task)
 
-    nonisolated func present(_ kind: Kind) async -> (UserDecision, StoredCredential?) {
+    nonisolated func present(_ kind: Kind) async -> Outcome {
         let (id, wait) = await MainActor.run { () -> (Int, TimeInterval) in
             nextId += 1
             let wait = confirmation == nil ? 0 : Self.confirmationMinimum - Date().timeIntervalSince(confirmationShown)
@@ -283,10 +356,9 @@ final class FIDOPrompts: ObservableObject {
         }
     }
 
-    private func show(id: Int, kind: Kind,
-                      continuation: CheckedContinuation<(UserDecision, StoredCredential?), Never>) {
+    private func show(id: Int, kind: Kind, continuation: CheckedContinuation<Outcome, Never>) {
         if cancelledBeforeShown.remove(id) != nil || self.continuation != nil {
-            continuation.resume(returning: (.denied, nil))
+            continuation.resume(returning: Outcome(decision: .denied))
             return
         }
         // A Touch ID from an earlier prompt must never sign for this one.
@@ -313,16 +385,17 @@ final class FIDOPrompts: ObservableObject {
             self?.finish(.timedOut, nil)
         }
         switch kind {
-        case .registration:
+        case .registration, .token:
             authenticate()
-        case .signIn where chosen != nil:
+        case let .signIn(prompt) where chosen != nil && !prompt.verified:
             authenticate()
         default:
             break
         }
     }
 
-    private func finish(_ decision: UserDecision, _ credential: StoredCredential?) {
+    private func finish(_ decision: UserDecision, _ credential: StoredCredential?,
+                        authorization: LAContext? = nil, blocked: Bool = false) {
         timeoutTask?.cancel()
         timeoutTask = nil
         authContext?.invalidate()
@@ -333,26 +406,59 @@ final class FIDOPrompts: ObservableObject {
         pickingAccount = false
         active = nil
         onActiveChange?(false)
-        continuation?.resume(returning: (decision, credential))
+        continuation?.resume(returning: Outcome(decision: decision, credential: credential,
+                                                authorization: authorization, blocked: blocked))
         continuation = nil
     }
 }
 
 extension FIDOPrompts: AuthenticatorUI {
     nonisolated func confirmRegistration(_ prompt: RegistrationPrompt) async -> UserDecision {
-        await present(.registration(prompt)).0
+        if prompt.verified {
+            await MainActor.run {
+                noteVerified(prompt.passkey ? "Passkey created for \(prompt.rpId)" : "Key registered with \(prompt.rpId)")
+            }
+            return .approved
+        }
+        return await present(.registration(prompt)).decision
     }
 
     nonisolated func chooseCredential(_ prompt: SignInPrompt) async -> (UserDecision, StoredCredential?) {
-        await present(.signIn(prompt))
+        if prompt.verified, prompt.candidates.count == 1, let only = prompt.candidates.first {
+            await MainActor.run { noteVerified("Signed in to \(prompt.rpId) as \(only.accountLabel)") }
+            return (.approved, only)
+        }
+        let outcome = await present(.signIn(prompt))
+        return (outcome.decision, outcome.credential)
     }
 
     nonisolated func acknowledgeExcluded(rpId: String) async -> UserDecision {
-        await present(.excluded(rpId: rpId)).0
+        await present(.excluded(rpId: rpId)).decision
     }
 
     nonisolated func confirmSelection() async -> UserDecision {
-        await present(.selection).0
+        await present(.selection).decision
+    }
+
+    nonisolated func authorizeToken(_ prompt: TokenPrompt) async -> TokenDecision {
+        let outcome = await present(.token(prompt))
+        switch outcome.decision {
+        case .approved: return .approved(authorization: outcome.authorization)
+        case .denied: return outcome.blocked ? .blocked : .denied
+        case .timedOut: return .timedOut
+        }
+    }
+
+    nonisolated func confirmDeletion(_ credential: StoredCredential) async -> UserDecision {
+        await present(.deletion(credential)).decision
+    }
+
+    /// iOS locks Touch ID after too many failed attempts until the passcode
+    /// is entered.
+    nonisolated var touchIDLocked: Bool {
+        var error: NSError?
+        let ok = LAContext().canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &error)
+        return !ok && error.map { LAError.Code(rawValue: $0.code) == .biometryLockout } == true
     }
 }
 

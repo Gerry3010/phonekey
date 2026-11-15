@@ -61,10 +61,10 @@ final class SecureEnclaveKeys: CredentialKeys {
         return x963
     }
 
-    func sign(id: Data, data: Data, reason: String) async throws -> Data {
-        // Normally the card has just done Touch ID; only without it does the
-        // signature ask on its own.
-        let context = handoff?.take() ?? LAContext()
+    func sign(id: Data, data: Data, reason: String, authorization: AnyObject?) async throws -> Data {
+        // A token's Touch ID, or the card's that has just been given; only
+        // without either does the signature ask on its own. Used up after.
+        let context = (authorization as? LAContext) ?? handoff?.take() ?? LAContext()
         context.localizedReason = reason
         context.localizedCancelTitle = "Cancel"
         context.localizedFallbackTitle = ""
@@ -119,8 +119,8 @@ final class SecureEnclaveKeys: CredentialKeys {
     /// Normally the sign-in card has just done Touch ID: the decryption uses
     /// that context and leaves it for the signature. Without one it asks itself
     /// and hands its own context on, so a sign-in still needs one Touch ID.
-    func decrypt(id: Data, ciphertext: Data, reason: String) async throws -> Data {
-        let handed = handoff?.peek()
+    func decrypt(id: Data, ciphertext: Data, reason: String, authorization: AnyObject?) async throws -> Data {
+        let handed = (authorization as? LAContext) ?? handoff?.peek()
         let context = handed ?? LAContext()
         if handed == nil {
             context.localizedReason = reason
@@ -155,6 +155,26 @@ final class SecureEnclaveKeys: CredentialKeys {
         }
         if handed == nil { handoff?.put(context) }
         return plain
+    }
+
+    /// Credential management lists public keys: no Touch ID may come up.
+    func publicKey(id: Data) throws -> Data {
+        let context = LAContext()
+        context.interactionNotAllowed = true
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassKey,
+            kSecAttrApplicationTag as String: Self.tag(id),
+            kSecAttrKeyType as String: kSecAttrKeyTypeECSECPrimeRandom,
+            kSecReturnRef as String: true,
+            kSecUseAuthenticationContext as String: context,
+        ]
+        var item: CFTypeRef?
+        var error: Unmanaged<CFError>?
+        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess, let item,
+              let publicKey = SecKeyCopyPublicKey(item as! SecKey),
+              let x963 = SecKeyCopyExternalRepresentation(publicKey, &error) as Data?
+        else { throw CTAPStatus.noCredentials }
+        return x963
     }
 
     func deleteKey(id: Data) {
@@ -213,6 +233,22 @@ final class KeychainCredentialStore: ObservableObject, CredentialStore, @uncheck
             counter = items[i].signCount
         }
         return counter
+    }
+
+    func allCredentials() -> [StoredCredential] {
+        locked { items }
+    }
+
+    func update(_ credential: StoredCredential) throws {
+        try mutate { items in
+            guard let i = items.firstIndex(where: { $0.id == credential.id }) else { throw CTAPStatus.noCredentials }
+            items[i] = credential
+        }
+    }
+
+    /// Metadata only; the authenticator deletes the key right after.
+    func delete(id: Data) throws {
+        try mutate { $0.removeAll { $0.id == id } }
     }
 
     /// Marks an account as suggested first on its site, or not.

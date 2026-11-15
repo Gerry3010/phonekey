@@ -116,11 +116,55 @@ struct FIDOPromptOverlay: View {
                             .multilineTextAlignment(.center)
                     }
                 }
-                touchIDButtons()
+                if p.verified {
+                    // The token's Touch ID is done: only which account.
+                    VStack(spacing: 8) {
+                        Button(action: prompts.signInVerified) {
+                            Text("Sign in").frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.large)
+                        declineButton()
+                    }
+                } else {
+                    touchIDButtons()
+                }
                 if p.candidates.count > 1 {
                     Button("Other account", action: prompts.chooseAnotherAccount)
                         .disabled(prompts.authenticating)
                 }
+            }
+
+        case let .token(p):
+            Text(p.signs ? FIDOPrompts.tokenPurpose(p) : "Manage passkeys").font(.title3.bold())
+            if let rpId = p.rpId {
+                site(rpId, name: ownSiteName(rpId))
+            }
+            if !p.signs {
+                Text("The computer wants to list passkeys on this iPhone and may ask to delete some. "
+                    + "Each deletion asks you again.")
+                    .font(.callout)
+                    .multilineTextAlignment(.center)
+                    .foregroundColor(.secondary)
+            }
+            touchIDButtons()
+
+        case let .deletion(credential):
+            Text("Delete this passkey?").font(.title3.bold())
+            site(credential.rpId, name: ownSiteName(credential.rpId))
+            Label(credential.accountLabel, systemImage: "person.crop.circle").foregroundColor(.secondary)
+            Text("Deleting is final: keys are not backed up. Make sure you have another way to sign in.")
+                .font(.callout)
+                .multilineTextAlignment(.center)
+                .foregroundColor(.secondary)
+            VStack(spacing: 8) {
+                Button(role: .destructive, action: prompts.confirmDeletionTap) {
+                    Text("Delete").frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.red)
+                .controlSize(.large)
+                Button("Cancel", role: .cancel, action: prompts.decline)
             }
 
         case let .excluded(rpId):

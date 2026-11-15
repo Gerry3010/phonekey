@@ -119,6 +119,9 @@ public enum PinUvAuthProtocol: Int, CaseIterable, Sendable {
 public final class CTAPSession: @unchecked Sendable {
     private let lock = NSLock()
     private var keyAgreement: P256.KeyAgreement.PrivateKey?
+    private var token: Token?
+    private var sites: [Site]?
+    private var credentials: [StoredCredential]?
 
     public init() {}
 
@@ -130,5 +133,149 @@ public final class CTAPSession: @unchecked Sendable {
         let key = P256.KeyAgreement.PrivateKey()
         keyAgreement = key
         return key
+    }
+
+    // MARK: pinUvAuthToken
+
+    /// The session's pinUvAuthToken (§10, "getPinUvAuthTokenUsingUvWithPermissions").
+    struct Token {
+        let value: Data
+        var permissions: UInt8
+        /// Its permissions RP ID; a token without one is bound at first use.
+        var rpId: String?
+        let issued: Date
+        var used = false
+        /// The token's Touch ID when it signs: one key operation.
+        var authorization: AnyObject?
+
+        init(value: Data, permissions: UInt8, rpId: String?, issued: Date, authorization: AnyObject?) {
+            self.value = value
+            self.permissions = permissions
+            self.rpId = rpId
+            self.issued = issued
+            self.authorization = authorization
+        }
+    }
+
+    /// What a request may reach with the token.
+    enum TokenScope {
+        /// One site: makeCredential, getAssertion, delete and update.
+        case rpId(String)
+        /// enumerateCredentialsBegin names the site by its hash.
+        case rpIdHash(Data)
+        /// getCredsMetadata and enumerateRPsBegin need a token without RP ID.
+        case unscoped
+        /// deleteCredential or updateUserInformation for an unknown credential:
+        /// only the token is checked, then NO_CREDENTIALS, as in CTAP.
+        case any
+    }
+
+    struct TokenUse {
+        let authorization: AnyObject?
+    }
+
+    static let initialUsageLimit: TimeInterval = 30
+    static let maxUsagePeriod: TimeInterval = 600
+
+    /// A new token replaces any earlier one of this session.
+    func setToken(_ new: Token) {
+        lock.lock()
+        defer { lock.unlock() }
+        token = new
+    }
+
+    /// Checks `param` = authenticate(token, message) and the token's
+    /// permission and scope. Any failure: PIN_AUTH_INVALID.
+    func useToken(param: Data, protocolNumber: Int?, message: Data, permission: UInt8,
+                  scope: TokenScope, now: Date) throws -> TokenUse {
+        guard let number = protocolNumber else { throw CTAPStatus.missingParameter }
+        guard let proto = PinUvAuthProtocol(rawValue: number) else { throw CTAPStatus.invalidParameter }
+        lock.lock()
+        defer { lock.unlock() }
+        guard var current = token else { throw CTAPStatus.pinAuthInvalid }
+        let age = now.timeIntervalSince(current.issued)
+        guard age >= 0, age < Self.maxUsagePeriod, current.used || age < Self.initialUsageLimit else {
+            token = nil
+            throw CTAPStatus.pinAuthInvalid
+        }
+        guard proto.verify(key: current.value, message: message, signature: param),
+              current.permissions & permission != 0
+        else { throw CTAPStatus.pinAuthInvalid }
+        let signs = permission & (TokenPrompt.makeCredential | TokenPrompt.getAssertion) != 0
+        switch scope {
+        case let .rpId(rpId):
+            if let bound = current.rpId {
+                guard bound == rpId else { throw CTAPStatus.pinAuthInvalid }
+            } else if signs {
+                // Only makeCredential and getAssertion bind a token without
+                // RP ID to the site of its first use (CTAP 2.1).
+                current.rpId = rpId
+            }
+        case let .rpIdHash(hash):
+            if let bound = current.rpId, Authenticator.rpIdHash(bound) != hash { throw CTAPStatus.pinAuthInvalid }
+        case .unscoped:
+            if current.rpId != nil { throw CTAPStatus.pinAuthInvalid }
+        case .any:
+            break
+        }
+        current.used = true
+        token = current
+        return TokenUse(authorization: signs ? current.authorization : nil)
+    }
+
+    /// After a makeCredential or getAssertion with the token, whatever its
+    /// outcome: it keeps no permission for another one (CTAP 2.1), and its
+    /// Touch ID is dropped (an `LAContext` is invalidated when released).
+    func consumeSigningPermissions() {
+        lock.lock()
+        defer { lock.unlock() }
+        token?.permissions &= ~(TokenPrompt.makeCredential | TokenPrompt.getAssertion)
+        token?.authorization = nil
+    }
+
+    // MARK: Credential management enumeration
+
+    struct Site {
+        let id: String
+        let name: String?
+    }
+
+    func beginEnumeration(sites rest: [Site]) {
+        lock.lock()
+        defer { lock.unlock() }
+        sites = rest
+        credentials = nil
+    }
+
+    func beginEnumeration(credentials rest: [StoredCredential]) {
+        lock.lock()
+        defer { lock.unlock() }
+        credentials = rest
+        sites = nil
+    }
+
+    func nextSite() -> Site? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard var rest = sites, !rest.isEmpty else { sites = nil; return nil }
+        let next = rest.removeFirst()
+        sites = rest
+        return next
+    }
+
+    func nextCredential() -> StoredCredential? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard var rest = credentials, !rest.isEmpty else { credentials = nil; return nil }
+        let next = rest.removeFirst()
+        credentials = rest
+        return next
+    }
+
+    func endEnumeration() {
+        lock.lock()
+        defer { lock.unlock() }
+        sites = nil
+        credentials = nil
     }
 }
