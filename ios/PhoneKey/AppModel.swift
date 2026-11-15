@@ -20,6 +20,8 @@ final class AppModel: ObservableObject {
     private let authenticator: Authenticator
     /// The one CTAP request being worked on, across all connections.
     private var ctapJob: (session: ObjectIdentifier, id: UInt64?, task: Task<Void, Never>)?
+    /// CTAP state per host connection ("power cycle", §10), dropped with it.
+    private var ctapSessions: [ObjectIdentifier: CTAPSession] = [:]
 
     @Published var photosAllowed: Bool {
         didSet { UserDefaults.standard.set(photosAllowed, forKey: "photosAllowed") }
@@ -162,10 +164,13 @@ final class AppModel: ObservableObject {
             let started = await MainActor.run { () -> Bool in
                 guard ctapJob == nil else { return false }
                 fidoPrompts.hostName = session.hostKey.flatMap { hosts.name(for: $0) }
+                let key = ObjectIdentifier(session)
+                let ctapSession = ctapSessions[key] ?? CTAPSession()
+                ctapSessions[key] = ctapSession
                 let task = Task { [authenticator] in
                     // Runs on after the handler returns, so the session keeps
                     // reading (ctap.cancel) while the user decides.
-                    let response = await authenticator.handle(data)
+                    let response = await authenticator.handle(data, session: ctapSession)
                     let sent = (try? await session.send(CTAPResponseMessage(id: id, data: response))) != nil
                     await MainActor.run {
                         self.ctapJob = nil
@@ -190,6 +195,7 @@ final class AppModel: ObservableObject {
 
     /// A connection ended: whatever it asked for is no longer wanted.
     private func sessionEnded(_ session: ObjectIdentifier) {
+        ctapSessions[session] = nil
         if let job = ctapJob, job.session == session {
             job.task.cancel()
         }

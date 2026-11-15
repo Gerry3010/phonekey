@@ -1,7 +1,7 @@
 import CryptoKit
 import Foundation
 
-/// CTAP status codes (CTAP 2.0 §6.3).
+/// CTAP status codes (CTAP 2.1 §8.2).
 public enum CTAPStatus: UInt8, Error {
     case ok = 0x00
     case invalidCommand = 0x01
@@ -21,8 +21,9 @@ public enum CTAPStatus: UInt8, Error {
     case noCredentials = 0x2E
     case userActionTimeout = 0x2F
     case notAllowed = 0x30
+    case pinAuthInvalid = 0x33
     case pinNotSet = 0x35
-    case pinAuthInvalid = 0x36
+    case invalidSubcommand = 0x3E
     case other = 0x7F
 }
 
@@ -46,11 +47,14 @@ public struct StoredCredential: Codable, Equatable, Identifiable {
     public var suggested: Bool?
     /// The user's own name for the account, only on the phone (app UI).
     public var localName: String?
+    /// `hmac-secret`: the credential's 32-byte random secret, encrypted to its
+    /// own key (`CredentialKeys.encrypt`). Absent if the site did not ask.
+    public var hmacSecret: Data?
 
     public init(id: Data, rpId: String, rpName: String?, userId: Data, userName: String?,
                 userDisplayName: String?, discoverable: Bool, created: Date, signCount: UInt32,
                 credProtect: Int? = nil, lastUsed: Date? = nil, suggested: Bool? = nil,
-                localName: String? = nil) {
+                localName: String? = nil, hmacSecret: Data? = nil) {
         self.id = id
         self.rpId = rpId
         self.rpName = rpName
@@ -64,6 +68,7 @@ public struct StoredCredential: Codable, Equatable, Identifiable {
         self.lastUsed = lastUsed
         self.suggested = suggested
         self.localName = localName
+        self.hmacSecret = hmacSecret
     }
 
     /// The best label for the account.
@@ -89,6 +94,11 @@ public protocol CredentialKeys: AnyObject {
     /// Signs `data` (ECDSA P-256 SHA-256, DER). May ask for Touch ID; throws
     /// CTAPStatus.operationDenied when the user declines.
     func sign(id: Data, data: Data, reason: String) async throws -> Data
+    /// Encrypts to a public key (x963) with ECIES. Needs no Touch ID.
+    func encrypt(toPublicKey x963: Data, plaintext: Data) throws -> Data
+    /// Decrypts with the key. Like `sign`, it needs Touch ID; within one
+    /// sign-in the same Touch ID covers both (docs/protocol.md §10).
+    func decrypt(id: Data, ciphertext: Data, reason: String) async throws -> Data
     func deleteKey(id: Data)
 }
 
@@ -124,7 +134,8 @@ public protocol AuthenticatorUI: AnyObject {
     func confirmSelection() async -> UserDecision
 }
 
-/// A CTAP 2.0 authenticator (docs/protocol.md §10).
+/// A CTAP 2.0 authenticator with Phase 3a: PIN/UV auth protocols and
+/// `hmac-secret` (docs/protocol.md §10).
 public final class Authenticator {
     public static let aaguid = Data([
         0x4E, 0x3B, 0x1F, 0xE3, 0xC7, 0x5C, 0x40, 0x55, 0xB7, 0x91, 0xC9, 0x99, 0xFF, 0x91, 0x59, 0x51,
@@ -158,9 +169,10 @@ public final class Authenticator {
         self.random = random
     }
 
-    /// Handles one CTAPHID CBOR message (command byte + parameters) and returns
-    /// status byte + CBOR response. Never throws.
-    public func handle(_ message: Data) async -> Data {
+    /// Handles one CTAPHID CBOR message (command byte + parameters) from the
+    /// host connection `session` and returns status byte + CBOR response.
+    /// Never throws.
+    public func handle(_ message: Data, session: CTAPSession) async -> Data {
         guard let byte = message.first else { return Data([CTAPStatus.invalidLength.rawValue]) }
         let params = Data(message.dropFirst())
         do {
@@ -171,10 +183,12 @@ public final class Authenticator {
             case .makeCredential:
                 response = try await makeCredential(try Self.parameters(params))
             case .getAssertion:
-                response = try await getAssertion(try Self.parameters(params))
+                response = try await getAssertion(try Self.parameters(params), session: session)
+            case .clientPIN:
+                response = try clientPIN(try Self.parameters(params), session: session)
             case .getNextAssertion, .reset:
                 throw CTAPStatus.notAllowed
-            case .clientPIN, nil:
+            case nil:
                 throw CTAPStatus.invalidCommand
             }
             try Task.checkCancellation()
@@ -205,11 +219,12 @@ public final class Authenticator {
     func getInfo() -> CBOR {
         .map([
             .int(1): .array([.text("FIDO_2_0")]),
-            .int(2): .array([.text("credProtect")]),
+            .int(2): .array([.text("credProtect"), .text("hmac-secret")]),
             .int(3): .bytes(Self.aaguid),
             .int(4): .map([.text("rk"): .bool(true), .text("up"): .bool(true),
                            .text("uv"): .bool(true), .text("plat"): .bool(false)]),
             .int(5): .int(Self.maxMessageSize),
+            .int(6): .array([.int(2), .int(1)]),
             .int(7): .int(Self.maxCredentialCountInList),
             .int(8): .int(Self.credentialIdLength),
             .int(9): .array([.text("usb")]),
@@ -232,6 +247,7 @@ public final class Authenticator {
         // credProtect: every use needs Touch ID anyway, so all levels hold;
         // the level is stored and echoed. Other extensions are ignored.
         let credProtect = p[6]?["credProtect"]?.int.flatMap { (1...3).contains($0) ? $0 : nil }
+        let wantsHmacSecret = p[6]?["hmac-secret"]?.bool == true
 
         if let pinAuth = p[8] {
             guard pinAuth.bytes?.isEmpty == true else { throw CTAPStatus.pinAuthInvalid }
@@ -264,6 +280,17 @@ public final class Authenticator {
             throw CTAPStatus.keyStoreFull
         }
         guard publicKey.count == 65, publicKey.first == 0x04 else { throw CTAPStatus.other }
+        // hmac-secret: CredRandomWithUV only, since no assertion is made
+        // without UV; stored encrypted to the credential's own key.
+        var hmacSecret: Data?
+        if wantsHmacSecret {
+            do {
+                hmacSecret = try keys.encrypt(toPublicKey: publicKey, plaintext: random(32))
+            } catch {
+                keys.deleteKey(id: credentialId)
+                throw CTAPStatus.other
+            }
+        }
         // A new passkey for an account that already has one replaces it
         // (CTAP 2.1 §6.1.2: same RP ID and user ID). Non-discoverable
         // credentials are never replaced: the site keeps their IDs.
@@ -275,21 +302,25 @@ public final class Authenticator {
             userName: user["name"]?.text, userDisplayName: user["displayName"]?.text,
             discoverable: passkey, created: Date(), signCount: 0, credProtect: credProtect,
             suggested: replaced.contains { $0.suggested == true } ? true : nil,
-            localName: replaced.lazy.compactMap(\.localName).first),
+            localName: replaced.lazy.compactMap(\.localName).first, hmacSecret: hmacSecret),
             replacing: replaced.map(\.id))
         // Only after the metadata is gone: a failure leaves an unused key, never
         // an entry without its key.
         for old in replaced { keys.deleteKey(id: old.id) }
 
+        var extensions: [CBOR.Pair] = []
+        if let credProtect { extensions.append(.init(.text("credProtect"), .int(credProtect))) }
+        if wantsHmacSecret { extensions.append(.init(.text("hmac-secret"), .bool(true))) }
+
         var authData = Self.rpIdHash(rpId)
-        authData.append(Flags.up | Flags.uv | Flags.at | (credProtect != nil ? Flags.ed : 0))
+        authData.append(Flags.up | Flags.uv | Flags.at | (extensions.isEmpty ? 0 : Flags.ed))
         authData += Self.counterBytes(0)
         authData += Self.aaguid
         authData += [UInt8(credentialId.count >> 8), UInt8(credentialId.count & 0xFF)]
         authData += credentialId
         authData += Self.coseKey(x963: publicKey).encoded
-        if let credProtect {
-            authData += CBOR.map([.text("credProtect"): .int(credProtect)]).encoded
+        if !extensions.isEmpty {
+            authData += CBOR.map(extensions).encoded
         }
         _ = clientDataHash // not signed with attestation "none"
 
@@ -302,10 +333,15 @@ public final class Authenticator {
 
     // MARK: getAssertion
 
-    private func getAssertion(_ p: CBOR) async throws -> CBOR {
+    private func getAssertion(_ p: CBOR, session: CTAPSession) async throws -> CBOR {
         let rpId = try required(p[1]?.text)
         let clientDataHash = try required(p[2]?.bytes)
-        if p[6] != nil { throw CTAPStatus.pinAuthInvalid }
+        if let pinAuth = p[6] {
+            // Zero length: authenticator selection, as for makeCredential.
+            guard pinAuth.bytes?.isEmpty == true else { throw CTAPStatus.pinAuthInvalid }
+            try check(await ui.confirmSelection())
+            throw CTAPStatus.pinNotSet
+        }
 
         let allowList = (p[3]?.array ?? []).compactMap { $0["id"]?.bytes }
         let candidates: [StoredCredential]
@@ -319,6 +355,8 @@ public final class Authenticator {
         // before enrolling a resident key, is answered above. A silent
         // signature is impossible: the key needs Touch ID.
         if p[5]?["up"]?.bool == false { throw CTAPStatus.unsupportedOption }
+        // Checked before anything is shown, so a bad request never prompts.
+        let hmacRequest = try p[4]?["hmac-secret"].map { try HmacSecretRequest($0, session: session) }
 
         let (decision, chosen) = await ui.chooseCredential(SignInPrompt(rpId: rpId, candidates: candidates))
         try check(decision)
@@ -327,10 +365,29 @@ public final class Authenticator {
             throw CTAPStatus.operationDenied
         }
 
+        // The same Touch ID decrypts the secret and then signs (§10).
+        var extensions: [CBOR.Pair] = []
+        if let hmacRequest, let sealed = credential.hmacSecret {
+            let credRandom: Data
+            do {
+                credRandom = try await keys.decrypt(id: credential.id, ciphertext: sealed,
+                                                    reason: "Sign in to \(rpId)")
+            } catch let status as CTAPStatus {
+                throw status
+            } catch {
+                throw CTAPStatus.operationDenied
+            }
+            try Task.checkCancellation()
+            extensions.append(.init(.text("hmac-secret"), .bytes(try hmacRequest.output(credRandom))))
+        }
+
         let counter = try store.incrementCounter(id: credential.id)
         var authData = Self.rpIdHash(rpId)
-        authData.append(Flags.up | Flags.uv)
+        authData.append(Flags.up | Flags.uv | (extensions.isEmpty ? 0 : Flags.ed))
         authData += Self.counterBytes(counter)
+        if !extensions.isEmpty {
+            authData += CBOR.map(extensions).encoded
+        }
         let signature = try await keys.sign(id: credential.id, data: authData + clientDataHash,
                                             reason: "Sign in to \(rpId)")
 
@@ -346,6 +403,57 @@ public final class Authenticator {
             response.append(.init(.int(4), .map(user)))
         }
         return .map(response)
+    }
+
+    // MARK: clientPIN
+
+    /// Phase 3a: only getKeyAgreement. The PIN subcommands come in 3c, the
+    /// token via Touch ID in 3b; until then they answer INVALID_SUBCOMMAND.
+    private func clientPIN(_ p: CBOR, session: CTAPSession) throws -> CBOR {
+        guard let number = p[1]?.int else { throw CTAPStatus.missingParameter }
+        guard PinUvAuthProtocol(rawValue: number) != nil else { throw CTAPStatus.invalidParameter }
+        guard let subCommand = p[2]?.int else { throw CTAPStatus.missingParameter }
+        switch subCommand {
+        case 0x02: // getKeyAgreement
+            return .map([.int(1): PinUvAuthProtocol.coseKey(session.keyAgreementKey().publicKey)])
+        default:
+            throw CTAPStatus.invalidSubcommand
+        }
+    }
+
+    /// A checked `hmac-secret` input of getAssertion (CTAP 2.1 §12.5).
+    struct HmacSecretRequest {
+        let pinUvAuthProtocol: PinUvAuthProtocol
+        let sharedSecret: Data
+        /// One or two 32-byte salts.
+        let salts: [Data]
+
+        init(_ input: CBOR, session: CTAPSession) throws {
+            guard input.isMap else { throw CTAPStatus.invalidParameter }
+            guard let proto = PinUvAuthProtocol(rawValue: input[4]?.int ?? 1) else {
+                throw CTAPStatus.invalidParameter
+            }
+            let peer = try PinUvAuthProtocol.platformKey(input[1])
+            guard let saltEnc = input[2]?.bytes, let saltAuth = input[3]?.bytes else {
+                throw CTAPStatus.missingParameter
+            }
+            let shared = try proto.sharedSecret(session.keyAgreementKey(), with: peer)
+            guard proto.verify(key: shared, message: saltEnc, signature: saltAuth) else {
+                throw CTAPStatus.pinAuthInvalid
+            }
+            let plain = try proto.decrypt(key: shared, saltEnc)
+            guard plain.count == 32 || plain.count == 64 else { throw CTAPStatus.invalidParameter }
+            pinUvAuthProtocol = proto
+            sharedSecret = shared
+            salts = plain.count == 32 ? [plain] : [Data(plain.prefix(32)), Data(plain.suffix(32))]
+        }
+
+        /// encrypt(shared secret, HMAC-SHA-256(CredRandom, salt1) [|| … salt2]).
+        func output(_ credRandom: Data) throws -> Data {
+            let key = SymmetricKey(data: credRandom)
+            let outputs = salts.map { Data(HMAC<SHA256>.authenticationCode(for: $0, using: key)) }
+            return try pinUvAuthProtocol.encrypt(key: sharedSecret, outputs.reduce(Data(), +))
+        }
     }
 
     // MARK: Helpers

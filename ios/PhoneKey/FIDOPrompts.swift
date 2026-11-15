@@ -381,6 +381,15 @@ final class TouchIDHandoff: @unchecked Sendable {
         context = nil
     }
 
+    /// The approved context without handing it out for good: the hmac-secret
+    /// decryption looks first, the signature then takes it (§10).
+    func peek() -> LAContext? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let context, Date().timeIntervalSince(since) < Self.lifetime else { return nil }
+        return context
+    }
+
     /// The approved context, once; nil if there is none or it is too old.
     func take() -> LAContext? {
         lock.lock()
