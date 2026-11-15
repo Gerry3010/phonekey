@@ -1,0 +1,14 @@
+# systemd user unit: the iPhone as a webcam (v4l2loopback) whenever it is
+# connected. Needs the v4l2loopback module (see linux/README.md). Install to
+# ~/.config/systemd/user/ and run
+#   systemctl --user enable --now phonekey-camera
+[Unit]
+Description=PhoneKey: iPhone camera as a webcam
+
+[Service]
+ExecStart=/usr/local/bin/phonekey camera run
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

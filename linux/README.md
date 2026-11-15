@@ -153,17 +153,54 @@ sudo systemd-cryptsetup attach data /dev/sdXN - fido2-device=auto
 Tested with a LUKS2 file on the iPhone 7: `systemd-cryptenroll` as above,
 `cryptsetup open --token-only --test-passphrase` and `systemd-cryptsetup attach`.
 
+## Webcam (Phase 4a)
+
+`phonekey camera run` turns the phone's camera into a webcam: a v4l2loopback
+device that browsers, video call apps and OBS can open. While no application
+reads it, it shows a still placeholder and the phone does not film. When an
+application starts reading, the host asks the phone for a stream, and when it
+stops, the stream stops too. The phone needs the PhoneKey app with Phase 4a and
+the webcam switched on in the app.
+
+One-time setup (needs root once):
+
+```bash
+# the headers for your kernel (Manjaro: e.g. linux72-headers), then the module
+sudo pacman -S linux72-headers v4l2loopback-dkms     # Debian/Ubuntu: v4l2loopback-dkms
+echo v4l2loopback | sudo tee /etc/modules-load.d/v4l2loopback.conf
+echo 'options v4l2loopback devices=1 video_nr=10 card_label="PhoneKey" exclusive_caps=1' \
+  | sudo tee /etc/modprobe.d/v4l2loopback.conf
+sudo modprobe v4l2loopback
+cp contrib/phonekey-camera.service ~/.config/systemd/user/
+systemctl --user enable --now phonekey-camera
+```
+
+- Options: `-camera front|back` (default front), `-quality 720p|1080p` (default
+  720p), `-fps 15` to `30`, `-device` (default `/dev/video10`).
+- The webcam always has the size of `-quality`. If the phone delivers less
+  (it may in portrait), the host scales up.
+- With `exclusive_caps=1`, applications see the webcam only while
+  `phonekey camera run` is running.
+- One application at a time can stream from the webcam; a second one gets
+  "Device or resource busy".
+- Decoding uses `ffmpeg` and adds about 67 ms, two frames at 30 fps.
+- The tests that need the real device run with
+  `PHONEKEY_TEST_V4L2=/dev/video10 go test ./...`.
+
 ## Layout
 
 ```
-cmd/phonekey        CLI (fido_linux.go: the security key daemon)
+cmd/phonekey        CLI (fido_linux.go: the security key daemon, camera_linux.go: the webcam)
 cmd/gen-vectors     writes docs/protocol-vectors.json
-contrib/            udev rule, systemd user unit
+contrib/            udev rule, systemd user units (fido, camera)
 internal/proto      preamble, framing, Noise handshake (flynn/noise), messages
 internal/client     connect, pair, requests, Mux for concurrent requests
 internal/ctap       CTAP2 client for diagnostics (fxamacker/cbor)
 internal/ctaphid    device side of CTAPHID (pure Go)
 internal/uhid       /dev/uhid (Linux only)
+internal/v4l2out    v4l2loopback producer and reader events (Linux only)
+internal/camera     webcam frames, ffmpeg decoder, placeholder picture
+internal/testphone  a phone for tests: handshake, pairing, CTAP, webcam
 internal/usbmux     usbmuxd client
 internal/store      host key and paired phones
 internal/pairing    pairing URL and terminal QR code

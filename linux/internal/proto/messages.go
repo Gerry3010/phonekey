@@ -124,7 +124,53 @@ type StatusReport struct {
 	Camera       struct {
 		Enabled   bool `json:"enabled"`
 		Available bool `json:"available"`
+		// Phase 4: the webcam switch in the app, and whether a stream runs.
+		StreamEnabled bool `json:"stream_enabled"`
+		Streaming     bool `json:"streaming"`
 	} `json:"camera"`
+}
+
+// CameraStart asks for a webcam stream (docs/protocol.md §5 "camera").
+type CameraStart struct {
+	T       string `json:"t"`
+	ID      uint64 `json:"id"`
+	Camera  string `json:"camera,omitempty"`
+	Quality string `json:"quality,omitempty"`
+	FPS     int    `json:"fps,omitempty"`
+}
+
+// CameraControl is camera.keyframe and camera.stop.
+type CameraControl struct {
+	T      string `json:"t"`
+	ID     uint64 `json:"id"`
+	Stream uint32 `json:"stream"`
+}
+
+// CameraStarted says what the phone actually delivers on Stream.
+type CameraStarted struct {
+	T      string `json:"t"`
+	ID     uint64 `json:"id"`
+	Stream uint32 `json:"stream"`
+	Codec  string `json:"codec"`
+	Width  int    `json:"width"`
+	Height int    `json:"height"`
+	FPS    int    `json:"fps"`
+	Camera string `json:"camera"`
+}
+
+// CameraChanged reports a new frame rate while a stream runs.
+type CameraChanged struct {
+	T      string `json:"t"`
+	Stream uint32 `json:"stream"`
+	FPS    int    `json:"fps"`
+}
+
+// CameraStopped ends a stream; ID is set when it answers camera.stop.
+type CameraStopped struct {
+	T      string  `json:"t"`
+	ID     *uint64 `json:"id,omitempty"`
+	Stream uint32  `json:"stream"`
+	Reason string  `json:"reason"`
 }
 
 type Battery struct {

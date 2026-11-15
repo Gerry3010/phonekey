@@ -34,6 +34,8 @@ Usage:
   phonekey fido run                be a USB security key while the phone is connected (Linux)
   phonekey fido info               show the phone's authenticator info
   phonekey fido selftest           register and use a test passkey, verify on this side
+  phonekey camera run              be a webcam (v4l2loopback) while the phone is connected (Linux);
+                                   -device /dev/video10 -camera front|back -quality 720p|1080p -fps 30
   phonekey version
 
 Connection flags (all commands that talk to the phone):
@@ -70,6 +72,8 @@ func main() {
 		err = photo(ctx, args)
 	case "fido":
 		err = fido(ctx, args)
+	case "camera":
+		err = cameraCmd(ctx, args)
 	case "version", "-version", "--version":
 		fmt.Println("phonekey", version)
 	case "help", "-h", "-help", "--help":
