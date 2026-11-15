@@ -77,6 +77,20 @@ func TestKdfLengths(t *testing.T) {
 	}
 }
 
+// Protocol two's HKDF-SHA-256 (RFC 5869, salt 32 zero bytes), expected values
+// computed independently with Python's hmac module.
+func TestKdfKnownAnswer(t *testing.T) {
+	z := make([]byte, 32)
+	for i := range z {
+		z[i] = byte(i + 1)
+	}
+	want := mustHex(t, "9eb685ea1bd795e05cbfbe28f0ef46f1b89ae3a73161c4d64d1181082e82db67"+
+		"e56b82398cbb09e2a1b546808a716befa7907d17976b72193c6f909413c73184")
+	if got := PinUvAuthProtocolTwo.kdf(z); !bytes.Equal(got, want) {
+		t.Fatalf("protocol two: %x", got)
+	}
+}
+
 func TestNewHmacSecretInput(t *testing.T) {
 	shared := make([]byte, 64)
 	rand.Read(shared)
