@@ -40,10 +40,14 @@ public struct StoredCredential: Codable, Equatable, Identifiable {
     public var signCount: UInt32
     /// credProtect level 1–3, if the platform asked for one.
     public var credProtect: Int?
+    /// When it last signed in. App bookkeeping; absent in data from before.
+    public var lastUsed: Date?
+    /// The user wants this account suggested first on its site (app UI).
+    public var suggested: Bool?
 
     public init(id: Data, rpId: String, rpName: String?, userId: Data, userName: String?,
                 userDisplayName: String?, discoverable: Bool, created: Date, signCount: UInt32,
-                credProtect: Int? = nil) {
+                credProtect: Int? = nil, lastUsed: Date? = nil, suggested: Bool? = nil) {
         self.id = id
         self.rpId = rpId
         self.rpName = rpName
@@ -54,6 +58,8 @@ public struct StoredCredential: Codable, Equatable, Identifiable {
         self.created = created
         self.signCount = signCount
         self.credProtect = credProtect
+        self.lastUsed = lastUsed
+        self.suggested = suggested
     }
 
     /// The best label for the account.
@@ -65,7 +71,9 @@ public struct StoredCredential: Codable, Equatable, Identifiable {
 public protocol CredentialStore: AnyObject {
     func credentials(rpId: String) -> [StoredCredential]
     func credential(id: Data) -> StoredCredential?
-    func save(_ credential: StoredCredential) throws
+    /// Adds `credential` and removes the credentials in `replacing`, in one
+    /// step, so there is never a moment with none or both of them.
+    func save(_ credential: StoredCredential, replacing: [Data]) throws
     /// Increments and returns the new counter.
     func incrementCounter(id: Data) throws -> UInt32
 }
@@ -118,6 +126,11 @@ public final class Authenticator {
         0x4E, 0x3B, 0x1F, 0xE3, 0xC7, 0x5C, 0x40, 0x55, 0xB7, 0x91, 0xC9, 0x99, 0xFF, 0x91, 0x59, 0x51,
     ])
     public static let maxMessageSize = 1200
+    /// Without these two, Chrome probes every allowList entry on its own with
+    /// `up = false`, which a Secure Enclave key cannot answer (§10). 16
+    /// descriptors of 32-byte IDs fit well within `maxMessageSize`.
+    public static let maxCredentialCountInList = 16
+    public static let credentialIdLength = 32
 
     enum Command: UInt8 {
         case makeCredential = 0x01
@@ -193,6 +206,8 @@ public final class Authenticator {
             .int(4): .map([.text("rk"): .bool(true), .text("up"): .bool(true),
                            .text("uv"): .bool(true), .text("plat"): .bool(false)]),
             .int(5): .int(Self.maxMessageSize),
+            .int(7): .int(Self.maxCredentialCountInList),
+            .int(8): .int(Self.credentialIdLength),
             .int(9): .array([.text("usb")]),
             .int(10): .array([.map([.text("alg"): .int(-7), .text("type"): .text("public-key")])]),
         ])
@@ -237,7 +252,7 @@ public final class Authenticator {
             userDisplayName: user["displayName"]?.text, passkey: passkey)))
         try Task.checkCancellation()
 
-        let credentialId = random(32)
+        let credentialId = random(Self.credentialIdLength)
         let publicKey: Data
         do {
             publicKey = try keys.createKey(id: credentialId)
@@ -245,10 +260,21 @@ public final class Authenticator {
             throw CTAPStatus.keyStoreFull
         }
         guard publicKey.count == 65, publicKey.first == 0x04 else { throw CTAPStatus.other }
+        // A new passkey for an account that already has one replaces it
+        // (CTAP 2.1 §6.1.2: same RP ID and user ID). Non-discoverable
+        // credentials are never replaced: the site keeps their IDs.
+        let replaced = passkey
+            ? store.credentials(rpId: rpId).filter { $0.discoverable && $0.userId == userId }
+            : []
         try store.save(StoredCredential(
             id: credentialId, rpId: rpId, rpName: rp["name"]?.text, userId: userId,
             userName: user["name"]?.text, userDisplayName: user["displayName"]?.text,
-            discoverable: passkey, created: Date(), signCount: 0, credProtect: credProtect))
+            discoverable: passkey, created: Date(), signCount: 0, credProtect: credProtect,
+            suggested: replaced.contains { $0.suggested == true } ? true : nil),
+            replacing: replaced.map(\.id))
+        // Only after the metadata is gone: a failure leaves an unused key, never
+        // an entry without its key.
+        for old in replaced { keys.deleteKey(id: old.id) }
 
         var authData = Self.rpIdHash(rpId)
         authData.append(Flags.up | Flags.uv | Flags.at | (credProtect != nil ? Flags.ed : 0))

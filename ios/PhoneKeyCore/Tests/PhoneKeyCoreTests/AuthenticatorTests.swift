@@ -9,7 +9,10 @@ final class MemoryStore: CredentialStore {
 
     func credentials(rpId: String) -> [StoredCredential] { items.filter { $0.rpId == rpId } }
     func credential(id: Data) -> StoredCredential? { items.first { $0.id == id } }
-    func save(_ credential: StoredCredential) throws { items.append(credential) }
+    func save(_ credential: StoredCredential, replacing: [Data]) throws {
+        items.removeAll { replacing.contains($0.id) }
+        items.append(credential)
+    }
     func incrementCounter(id: Data) throws -> UInt32 {
         guard let i = items.firstIndex(where: { $0.id == id }) else { throw CTAPStatus.noCredentials }
         items[i].signCount += 1
@@ -132,6 +135,61 @@ final class AuthenticatorTests: XCTestCase {
         XCTAssertEqual(info?[4]?["uv"], .bool(true))
         XCTAssertNil(info?[4]?["clientPin"])
         XCTAssertEqual(info?[10]?.array?.first?["alg"]?.int, -7)
+        // Chrome batches allow lists only with both of these (§10).
+        XCTAssertEqual(info?[7]?.int, 16)
+        XCTAssertEqual(info?[8]?.int, 32)
+    }
+
+    /// Credentials saved before `lastUsed` and `suggested` existed still load.
+    func testStoredCredentialDecodesOlderData() throws {
+        let old = #"{"id":"AQI=","rpId":"github.com","userId":"Aw==","userName":"gerry","discoverable":true,"created":700000000,"signCount":3}"#
+        let credential = try JSONDecoder().decode(StoredCredential.self, from: Data(old.utf8))
+        XCTAssertEqual(credential.rpId, "github.com")
+        XCTAssertEqual(credential.signCount, 3)
+        XCTAssertNil(credential.lastUsed)
+        XCTAssertNil(credential.suggested)
+    }
+
+    /// Registering a passkey again for the same account replaces the old one
+    /// (CTAP 2.1); another account and non-discoverable keys stay.
+    func testNewPasskeyReplacesSameAccount() async throws {
+        let (first, _) = try await register(rk: true)
+        store.items[0].suggested = true
+        let (other, _) = try await register(rk: true, user: "other")
+        let (nonResident, _) = try await register(rk: false)
+        let (second, _) = try await register(rk: true)
+
+        let ids = store.credentials(rpId: "github.com").map(\.id)
+        XCTAssertFalse(ids.contains(first), "the old passkey is replaced")
+        XCTAssertTrue(ids.contains(second))
+        XCTAssertTrue(ids.contains(other))
+        XCTAssertTrue(ids.contains(nonResident))
+        XCTAssertEqual(store.credentials(rpId: "github.com").filter { $0.discoverable && $0.userName == "gerry" }.count, 1)
+        XCTAssertNil(keys.keys[first], "its key is deleted")
+        XCTAssertNotNil(keys.keys[second])
+        XCTAssertEqual(store.credential(id: second)?.suggested, true, "keeps the suggestion")
+    }
+
+    /// A full batch, as Chrome sends it after reading getInfo 7 and 8, fits the
+    /// message size and finds the credential among foreign IDs.
+    func testFullAllowListBatch() async throws {
+        let (credentialId, _) = try await register(rk: false)
+        XCTAssertEqual(credentialId.count, Authenticator.credentialIdLength)
+        func descriptor(_ id: Data) -> CBOR { .map([.text("id"): .bytes(id), .text("type"): .text("public-key")]) }
+        let foreign = (0..<(Authenticator.maxCredentialCountInList - 1)).map { _ in
+            Data((0..<Authenticator.credentialIdLength).map { _ in UInt8.random(in: 0...255) })
+        }
+        let allow = CBOR.array((foreign + [credentialId]).map(descriptor))
+
+        let (status, body) = await call(0x02, .map([.int(1): .text("github.com"), .int(2): .bytes(clientDataHash),
+                                                    .int(3): allow]))
+        XCTAssertEqual(status, 0)
+        XCTAssertEqual(body?[1]?["id"]?.bytes, credentialId)
+
+        // Even with the longest possible RP ID the request stays within maxMsgSize.
+        let longest = CBOR.map([.int(1): .text(String(repeating: "a", count: 253)), .int(2): .bytes(clientDataHash),
+                                .int(3): allow, .int(5): .map([.text("up"): .bool(true)])])
+        XCTAssertLessThan(1 + longest.encoded.count, Authenticator.maxMessageSize)
     }
 
     func testPasskeyRegistrationAndSignIn() async throws {

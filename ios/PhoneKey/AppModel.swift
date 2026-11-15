@@ -51,8 +51,11 @@ final class AppModel: ObservableObject {
         // The property initializer ran before monitoring was on and saw "unknown".
         battery = BatteryInfo.current
 
-        let keys = SecureEnclaveKeys()
+        let handoff = TouchIDHandoff()
+        fidoPrompts.handoff = handoff
+        let keys = SecureEnclaveKeys(handoff: handoff)
         credentials = KeychainCredentialStore(keys: keys)
+        fidoPrompts.credentials = credentials
         authenticator = Authenticator(store: credentials, keys: keys, ui: fidoPrompts)
 
         do {
@@ -163,8 +166,11 @@ final class AppModel: ObservableObject {
                     // Runs on after the handler returns, so the session keeps
                     // reading (ctap.cancel) while the user decides.
                     let response = await authenticator.handle(data)
-                    try? await session.send(CTAPResponseMessage(id: id, data: response))
-                    await MainActor.run { self.ctapJob = nil }
+                    let sent = (try? await session.send(CTAPResponseMessage(id: id, data: response))) != nil
+                    await MainActor.run {
+                        self.ctapJob = nil
+                        self.fidoPrompts.requestFinished(succeeded: sent && response.first == CTAPStatus.ok.rawValue)
+                    }
                 }
                 ctapJob = (ObjectIdentifier(session), id, task)
                 return true

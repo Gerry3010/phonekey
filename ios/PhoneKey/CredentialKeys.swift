@@ -10,11 +10,19 @@ import Security
 final class SecureEnclaveKeys: CredentialKeys {
     private static let tagPrefix = "net.geraldhofbauer.phonekey.credential."
 
+    /// The Touch ID from the sign-in card, if the user just gave one.
+    private let handoff: TouchIDHandoff?
+
+    init(handoff: TouchIDHandoff? = nil) {
+        self.handoff = handoff
+    }
+
     private static func tag(_ id: Data) -> Data {
         Data((tagPrefix + id.base64URLEncodedString).utf8)
     }
 
-    func createKey(id: Data) throws -> Data {
+    /// The rule every credential key carries: usable only after Touch ID.
+    static func accessControl() throws -> SecAccessControl {
         var error: Unmanaged<CFError>?
         #if targetEnvironment(simulator)
         let flags: SecAccessControlCreateFlags = [.biometryAny]
@@ -24,6 +32,12 @@ final class SecureEnclaveKeys: CredentialKeys {
         guard let access = SecAccessControlCreateWithFlags(
             nil, kSecAttrAccessibleWhenUnlockedThisDeviceOnly, flags, &error)
         else { throw error!.takeRetainedValue() as Error }
+        return access
+    }
+
+    func createKey(id: Data) throws -> Data {
+        var error: Unmanaged<CFError>?
+        let access = try Self.accessControl()
 
         var attributes: [String: Any] = [
             kSecAttrKeyType as String: kSecAttrKeyTypeECSECPrimeRandom,
@@ -48,9 +62,13 @@ final class SecureEnclaveKeys: CredentialKeys {
     }
 
     func sign(id: Data, data: Data, reason: String) async throws -> Data {
-        let context = LAContext()
+        // Normally the card has just done Touch ID; only without it does the
+        // signature ask on its own.
+        let context = handoff?.take() ?? LAContext()
         context.localizedReason = reason
         context.localizedCancelTitle = "Cancel"
+        context.localizedFallbackTitle = ""
+        defer { context.invalidate() }
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Data, Error>) in
                 // SecKeyCreateSignature blocks while Touch ID is shown.
@@ -116,8 +134,11 @@ final class KeychainCredentialStore: ObservableObject, CredentialStore, @uncheck
         locked { items.first { $0.id == id } }
     }
 
-    func save(_ credential: StoredCredential) throws {
-        try mutate { $0.append(credential) }
+    func save(_ credential: StoredCredential, replacing: [Data]) throws {
+        try mutate { items in
+            items.removeAll { replacing.contains($0.id) }
+            items.append(credential)
+        }
     }
 
     func incrementCounter(id: Data) throws -> UInt32 {
@@ -125,9 +146,18 @@ final class KeychainCredentialStore: ObservableObject, CredentialStore, @uncheck
         try mutate { items in
             guard let i = items.firstIndex(where: { $0.id == id }) else { throw CTAPStatus.noCredentials }
             items[i].signCount &+= 1
+            items[i].lastUsed = Date()
             counter = items[i].signCount
         }
         return counter
+    }
+
+    /// Marks an account as suggested first on its site, or not.
+    func setSuggested(id: Data, _ suggested: Bool) {
+        try? mutate { items in
+            guard let i = items.firstIndex(where: { $0.id == id }) else { return }
+            items[i].suggested = suggested ? true : nil
+        }
     }
 
     /// Deletes the key and the metadata. Cannot be undone.

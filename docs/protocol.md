@@ -231,13 +231,11 @@ security key and the phone ([§10](#10-fido-security-key)).
 {"t":"ctap.cancel","id":4}
 ```
 
-- `cmd` is the CTAPHID command: `16` (`0x10`, CBOR), `8` (`0x08`, WINK) or,
-  from Phase 3c, `3` (`0x03`, MSG: U2F, [§10](#u2f-over-ctaphid-msg-3c)).
+- `cmd` is the CTAPHID command: `16` (`0x10`, CBOR) or `8` (`0x08`, WINK).
 - `data` is standard base64 with padding (the JSON encoding of a byte array in
   Go and Swift). For CBOR the request is the CTAP command byte followed by the
   CBOR parameters; the response is the CTAP status byte followed by the CBOR
-  response. For WINK both are empty For MSG they are the
-  U2F request and response APDUs.
+  response. For WINK both are empty.
 - The phone answers every `ctap.request` with exactly one `ctap.response`, also
   for errors (a CTAP status byte other than `0x00`). Protocol errors such as a
   missing `data` field use the `error` message with code `bad_request`.
@@ -282,7 +280,8 @@ The session key is not a FIDO key. FIDO credential keys are created in the
 Secure Enclave (Phase 2). Their list is a Keychain item (`…ThisDeviceOnly`)
 that the phone reads without Touch ID. From Phase 3a the per-credential
 `hmac-secret` secrets are stored with it, encrypted to the credential's Secure
-Enclave key; decrypting them needs Touch ID.
+Enclave key, and from 3c the PIN hash, encrypted to a Secure Enclave key of
+its own; decrypting either needs Touch ID.
 
 ## 8. Security notes
 
@@ -292,6 +291,10 @@ Enclave key; decrypting them needs Touch ID.
   session is authenticated.
 - A pairing needs a confirmation on the phone and a secret that is only shown on
   the host's screen.
+- The FIDO PIN (Phase 3c) is a formality for clients that insist on one: every
+  token issued against it also needs Touch ID. A short PIN would be guessable
+  offline from a copied Keychain if it were stored as a plain hash; it is
+  encrypted to the Secure Enclave instead, and the phone allows 8 attempts.
 
 ## 9. usbmuxd notes
 
@@ -313,8 +316,8 @@ header, `version` = 1, `message` = 8 for plist, `tag`) followed by an XML plist.
 
 What the phone implements, so host and phone agree on behaviour. References:
 CTAP 2.1 (FIDO Alliance, "Client to Authenticator Protocol", Proposed Standard
-2021, errata 2022), the FIDO U2F Raw Message Formats v1.2 and WebAuthn Level 2.
-Status names below are CTAP's without the `CTAP1_ERR_`/`CTAP2_ERR_` prefix.
+2021, errata 2022) and WebAuthn Level 2. Status names below are CTAP's without
+the `CTAP1_ERR_`/`CTAP2_ERR_` prefix.
 
 Phase 2 is a CTAP 2.0 authenticator. Phase 3 adds the rest in three steps;
 each step changes `authenticatorGetInfo`, so hosts never have to guess:
@@ -322,38 +325,50 @@ each step changes `authenticatorGetInfo`, so hosts never have to guess:
 | Step | Adds | Unlocks |
 |---|---|---|
 | 3a | PIN/UV auth protocols 1 and 2, `getKeyAgreement`, `hmac-secret` | LUKS (`systemd-cryptenroll`) and other `hmac-secret` users |
-| 3b | `pinUvAuthToken` via Touch ID, `authenticatorSelection`, credential management, `FIDO_2_1` | `ssh-keygen -K`, key management in browsers |
-| 3c | U2F (CTAP1) over CTAPHID `MSG` | U2F-only clients |
+| 3b | `pinUvAuthToken` via Touch ID, `authenticatorSelection`, credential management, `FIDO_2_1` | Listing and deleting passkeys with libfido2 (`fido2-token`), Touch ID only |
+| 3c | A PIN, used only together with Touch ID | `ssh-keygen -K`, `ssh-add -K` and Chrome's key management: both insist on a PIN |
 
 Until a step has landed on both sides, everything it adds answers as in the
-step before.
+step before. U2F (CTAP1) is not planned; it comes only if a service needs it.
 
 ### authenticatorGetInfo (`0x04`)
 
 | Key | Phase 2 | Phase 3 (step) |
 |---|---|---|
-| 1 versions | `["FIDO_2_0"]` | `["FIDO_2_0", "FIDO_2_1"]` (3b), plus `"U2F_V2"` first (3c) |
+| 1 versions | `["FIDO_2_0"]` | `["FIDO_2_0", "FIDO_2_1"]` (3b) |
 | 2 extensions | `["credProtect"]` | `["credProtect", "hmac-secret"]` (3a) |
 | 3 aaguid | `4e3b1fe3-c75c-4055-b791-c999ff915951` | unchanged |
-| 4 options | `{"rk": true, "up": true, "uv": true, "plat": false}` | adds `"pinUvAuthToken": true`, `"credMgmt": true` (3b) |
+| 4 options | `{"rk": true, "up": true, "uv": true, "plat": false}` | adds `"pinUvAuthToken": true`, `"credMgmt": true` (3b); `"clientPin"` (3c): `false` until a PIN is set, then `true` |
 | 5 maxMsgSize | 1200 | unchanged |
 | 6 pinUvAuthProtocols | absent | `[2, 1]` (3a) |
+| 7 maxCredentialCountInList | 16 | unchanged |
+| 8 maxCredentialIdLength | 32 | unchanged |
 | 9 transports | `["usb"]` | unchanged |
 | 10 algorithms | `[{"alg": -7, "type": "public-key"}]` | unchanged |
+| 13 minPINLength | absent | 4 (3c) |
 | 17 preferredPlatformUvAttempts | absent | 1 (3b): Touch ID retries on its own |
 | 18 uvModality | absent | 2, fingerprint (3b) |
 
-There is never a `clientPin` option: the phone has no PIN, Touch ID is the only
-user verification. `alwaysUv` and `makeCredUvNotRqd` are absent; every
-operation needs Touch ID anyway.
+Keys 7 and 8 matter for Chrome: without both it sends allow and exclude lists
+one entry at a time, each first as a silent probe (`up = false`), which the
+phone cannot answer with a signature (see getAssertion). With them, up to 16
+IDs of at most 32 bytes go into one request with `up = true`. More than 16
+matching candidates still end in probes; Chrome then reports the key as not
+registered.
+
+Touch ID is the user verification. `uv` and `pinUvAuthToken` stay `true` when a
+PIN exists, so browsers and ssh keep verifying with Touch ID and never ask for
+the PIN for a normal sign-in. `alwaysUv` and `makeCredUvNotRqd` are absent;
+every operation needs Touch ID anyway.
 
 ### Session state ("power cycle")
 
 CTAP ties some state to a power cycle. Here it is tied to the session with one
-host (§3): the phone's key agreement key, the `pinUvAuthToken` and any
-credential management enumeration belong to that session and are dropped when
-it ends. Another host's session cannot use them. A reconnecting host starts
-over, just as its virtual USB key disappears and comes back (see Host side).
+host (§3): the phone's key agreement key, the `pinUvAuthToken`, the count of
+wrong PINs in a row and any credential management enumeration belong to that
+session and are dropped when it ends. Another host's session cannot use them.
+A reconnecting host starts over, just as its virtual USB key disappears and
+comes back (see Host side).
 
 ### authenticatorMakeCredential (`0x01`)
 
@@ -362,16 +377,23 @@ over, just as its virtual USB key disappears and comes back (see Host side).
 - `excludeList` hit: the phone shows that the key is already registered, waits
   for a tap, then answers `0x19` (`CREDENTIAL_EXCLUDED`).
 - `pinUvAuthParam` (key 8) of length zero (authenticator selection): after a
-  tap on the phone, `0x35` (`PIN_NOT_SET`); declined or no answer: `0x27`
-  (`OPERATION_DENIED`).
+  tap on the phone, `0x35` (`PIN_NOT_SET`), or from 3c with a PIN set `0x31`
+  (`PIN_INVALID`); declined or no answer: `0x27` (`OPERATION_DENIED`).
 - Non-empty `pinUvAuthParam`: up to step 3a always `0x33`
   (`PIN_AUTH_INVALID`). Phase 2 answered `0x36`, which is `PUAT_REQUIRED`; that
   was a bug. From 3b the phone verifies it as described under
   [Using a pinUvAuthToken](#using-a-pinuvauthtoken).
 - Without `pinUvAuthParam` the phone shows the site (`rp.id`), the account and
-  whether it becomes a passkey (`rk`), then asks for Touch ID, whatever
-  `options.uv` says. Declined or failed: `0x27` (`OPERATION_DENIED`). No answer
-  within 60 s: `0x2F` (`USER_ACTION_TIMEOUT`).
+  whether it becomes a passkey (`rk`), and opens Touch ID at once, whatever
+  `options.uv` says. Cancelling or failing Touch ID does not decline: the
+  details stay on screen with a button to try Touch ID again. Only the explicit
+  Decline button answers `0x27` (`OPERATION_DENIED`). No answer within 60 s:
+  `0x2F` (`USER_ACTION_TIMEOUT`).
+- The phone never answers `0x36` (`PUAT_REQUIRED`). CTAP 2.1 would ask for a
+  token when built-in UV is configured and the request brings neither a token
+  nor `uv`; the phone verifies with Touch ID instead, which is stricter, and
+  clients that never ask for UV (`ssh-keygen -t ecdsa-sk` without
+  `verify-required`) keep working.
 - A new P-256 key is created in the Secure Enclave, usable only after Touch ID
   with any enrolled finger. The credential ID is 32 random bytes; it names the
   key on the phone and carries no key material.
@@ -389,14 +411,17 @@ over, just as its virtual USB key disappears and comes back (see Host side).
     Touch ID can decrypt it. `CredRandomWithoutUV` is never needed: no
     assertion is made without UV.
   - Other extensions are ignored.
-- Every credential is stored on the phone, discoverable or not.
+- Every credential is stored on the phone, discoverable or not. A new
+  discoverable credential replaces the discoverable credentials of the same
+  account (same `rp.id` and `user.id`), as CTAP 2.1 requires: metadata in one
+  step, the old Secure Enclave keys right after. Non-discoverable credentials
+  are never replaced; the site still holds their IDs.
 
 ### authenticatorGetAssertion (`0x02`)
 
-- Candidates: the stored credentials in `allowList` whose RP ID hash matches
-  `rpId`, or without `allowList` all discoverable credentials for `rpId`. None:
-  `0x2E` (`NO_CREDENTIALS`). Credentials registered over U2F (3c) match by RP ID
-  hash, as CTAP 2.1 §10 requires.
+- Candidates: the stored credentials in `allowList` for `rpId`, or without
+  `allowList` all discoverable credentials for `rpId`. None: `0x2E`
+  (`NO_CREDENTIALS`).
 - Candidates are looked up first, so a silent lookup (`options.up = false`)
   without matching credentials answers `0x2E` without any prompt (OpenSSH does
   this before enrolling a resident key). With matching credentials `up = false`
@@ -405,10 +430,20 @@ over, just as its virtual USB key disappears and comes back (see Host side).
 - Several discoverable candidates: the phone lets the user pick one (it has a
   display), so the response never sets `numberOfCredentials` and
   `authenticatorGetNextAssertion` (`0x08`) answers `0x30` (`NOT_ALLOWED`).
-- `pinUvAuthParam` (key 6): as for makeCredential.
-- Without `pinUvAuthParam` the phone shows the site and the account; Touch ID
-  unlocks the signature. Flags `UP | UV` (`0x05`, `0x85` with extensions); the
-  per-credential counter goes up by one.
+- `pinUvAuthParam` (key 6) and `PUAT_REQUIRED`: as for makeCredential.
+- The phone shows the site and the account and opens Touch ID at once. With
+  several candidates it preselects one: an account the user marked as
+  suggested for the site, else the one used last, else the newest. "Other
+  account" lists them all. Cancelling Touch ID works as for makeCredential.
+  That one Touch ID also unlocks the signature. Flags `UP | UV` (`0x05`, `0x85`
+  with extensions); the per-credential counter goes up by one.
+- After signing in with another account than the preselected one, the phone
+  asks whether to suggest it for the site from now on, as well as or instead
+  of the current suggestions. This happens after the answer has gone out and
+  is only stored on the phone; hosts see nothing of it.
+- Once the answer has gone out, the phone shows for a moment that the
+  registration or sign-in is done, so one request is visibly over before the
+  next one starts.
 - `hmac-secret` (3a), input map `{1: keyAgreement, 2: saltEnc, 3: saltAuth,
   4: pinUvAuthProtocol}` (4 defaults to 1):
   - The shared secret comes from the platform's `keyAgreement` and the phone's
@@ -425,21 +460,25 @@ over, just as its virtual USB key disappears and comes back (see Host side).
     Enclave cannot compute HMAC. It exists in plain text only in the app's
     memory while the output is computed.
 - The response contains `credential`, `authData`, `signature` (DER) and, for
-  discoverable credentials, `user` (`id`, `name`, `displayName`).
+  discoverable credentials, `user` (`id`, `name`, `displayName`) as the site
+  stored them. Names the user gave keys or sites on the phone never leave it.
 
 ### authenticatorClientPIN (`0x06`)
 
-Without a PIN only some subcommands make sense. `pinUvAuthProtocol` (key 1)
-must be 1 or 2, else `0x02` (`INVALID_PARAMETER`); missing parameters: `0x14`
-(`MISSING_PARAMETER`).
+`pinUvAuthProtocol` (key 1) must be 1 or 2, else `0x02` (`INVALID_PARAMETER`);
+missing parameters: `0x14` (`MISSING_PARAMETER`).
 
 | subCommand | Phone |
 |---|---|
-| `0x02` getKeyAgreement (3a) | `{1: keyAgreement}`: the phone's P-256 key agreement key of this session as a COSE key `{1: 2, 3: -25, -1: 1, -2: x, -3: y}`. Created when first asked for, never stored, dropped with the session. |
+| `0x02` getKeyAgreement (3a) | `{1: keyAgreement}`: the phone's P-256 key agreement key of this session as a COSE key `{1: 2, 3: -25, -1: 1, -2: x, -3: y}`. Created when first asked for, never stored, dropped with the session, replaced after a wrong PIN. |
 | `0x06` getPinUvAuthTokenUsingUvWithPermissions (3b) | see below |
 | `0x07` getUVRetries (3b) | `{5: 8}`, or `{5: 0}` while iOS has locked Touch ID after failed attempts |
-| `0x01`, `0x03`, `0x04`, `0x05`, `0x09` (PIN) | `0x3E` (`INVALID_SUBCOMMAND`) |
-| anything else, and `0x06`/`0x07` before 3b | `0x3E` |
+| `0x01` getPINRetries (3c) | `{3: retries left, 4: true}` with `4` only while this session is blocked after three wrong PINs in a row; no PIN set: `0x35` (`PIN_NOT_SET`) |
+| `0x03` setPIN (3c) | see [PIN](#pin-3c) |
+| `0x04` changePIN (3c) | see [PIN](#pin-3c) |
+| `0x05` getPinToken (3c) | see [PIN](#pin-3c) |
+| `0x09` getPinUvAuthTokenUsingPinWithPermissions (3c) | see [PIN](#pin-3c) |
+| anything else, and each subcommand before its step | `0x3E` (`INVALID_SUBCOMMAND`) |
 
 The two PIN/UV auth protocols are implemented exactly as in CTAP 2.1 §6.5.6
 and §6.5.7 (protocol 1: SHA-256 of the ECDH x coordinate, AES-256-CBC with a
@@ -468,6 +507,45 @@ Parameters: `pinUvAuthProtocol`, `keyAgreement` (key 3), `permissions` (key 9),
 The token expires when the session ends, when it is not used within 30 s of
 being issued, and 600 s after being issued at the latest.
 
+#### PIN (3c)
+
+The PIN exists because OpenSSH (`ssh-keygen -K`, `ssh-add -K`) and Chrome's key
+management refuse to work without one. It never replaces Touch ID: **every
+token issued against the PIN also needs Touch ID on the phone**, so the PIN
+alone unlocks nothing.
+
+- **Storage.** The phone keeps only CTAP's `LEFT(SHA-256(PIN), 16)`, encrypted
+  to a Secure Enclave key of its own (ECIES as for `hmac-secret`) that is
+  usable only after Touch ID; `…ThisDeviceOnly`, never synced, never on the
+  host. Comparing a PIN therefore always happens inside a Touch ID prompt, and
+  a copied Keychain alone does not allow guessing it offline.
+- **Policy.** 4 to 63 bytes of UTF-8 (`newPinEnc` is the PIN padded with zeros
+  to 64 bytes, as in CTAP). Shorter or longer: `0x37` (`PIN_POLICY_VIOLATION`).
+- **Retries.** 8 in total, reset by a correct PIN. A wrong PIN answers `0x31`
+  (`PIN_INVALID`) and replaces the session's key agreement key. Three wrong
+  PINs in a row block the session: `0x34` (`PIN_AUTH_BLOCKED`) until the host
+  reconnects. At 0 retries the PIN is blocked: `0x32` (`PIN_BLOCKED`).
+- **setPIN** (`0x03`): parameters `keyAgreement`, `newPinEnc` (key 5),
+  `pinUvAuthParam` = `authenticate(shared secret, newPinEnc)`. A PIN already
+  set: `0x30` (`NOT_ALLOWED`). The phone shows the host's name, asks for
+  Touch ID, then stores the PIN.
+- **changePIN** (`0x04`): adds `pinHashEnc` (key 6); `pinUvAuthParam` =
+  `authenticate(shared secret, newPinEnc || pinHashEnc)`. Touch ID, then the
+  old PIN is checked (retries as above), then the new one stored. Every token
+  of every session is invalidated.
+- **getPinToken** (`0x05`, for CTAP 2.0 clients): `keyAgreement`,
+  `pinHashEnc`. Touch ID, then the PIN check; the token gets `mc` and `ga`
+  without an RP ID.
+- **getPinUvAuthTokenUsingPinWithPermissions** (`0x09`): `keyAgreement`,
+  `pinHashEnc`, `permissions`, `rpId`; permission checks as for `0x06`. The
+  prompt says what the token is for, then Touch ID, then the PIN check.
+- Declined, timeout and Touch ID failures answer as for `0x06`. Tokens from the
+  PIN behave exactly like tokens from Touch ID.
+- **Forgotten or blocked PIN.** Reset in the app with Touch ID: only the PIN is
+  removed, the keys stay. `authenticatorReset` stays `0x30`.
+- **In the app** the PIN can also be set, changed and removed, always with
+  Touch ID.
+
 #### Using a pinUvAuthToken
 
 From 3b, a makeCredential or getAssertion with a non-empty `pinUvAuthParam`:
@@ -478,7 +556,7 @@ From 3b, a makeCredential or getAssertion with a non-empty `pinUvAuthParam`:
   the `mc` or `ga` permission, or names another RP ID.
 - Otherwise there is no second Touch ID: the Touch ID of the token request
   authorizes this one operation. The phone still shows the account it is
-  registering, and the account picker if there are several discoverable
+  registering, and the account choice if there are several discoverable
   candidates. `excludeList` hits work as above.
 - Afterwards the token keeps no permissions for `mc` and `ga` (CTAP 2.1); a new
   operation needs a new token and a new Touch ID.
@@ -498,9 +576,9 @@ permission; failure: `0x33`. A token with an RP ID only reaches that RP;
 | subCommand | Auth | Phone |
 |---|---|---|
 | `0x01` getCredsMetadata | yes | `{1: discoverable credentials, 2: 100}`. There is no fixed limit; 100 keeps hosts from refusing. |
-| `0x02` enumerateRPsBegin | yes | `{3: rp, 4: rpIDHash, 5: totalRPs}`. `rp` is `{"id": …}`: RP names are not stored. None: `0x2E`. |
+| `0x02` enumerateRPsBegin | yes | `{3: rp, 4: rpIDHash, 5: totalRPs}`. `rp` is `{"id": …}` plus the site's `name` if it sent one; the user's own site names stay on the phone. None: `0x2E`. |
 | `0x03` enumerateRPsGetNextRP | no | `{3: rp, 4: rpIDHash}`; past the end or without a begin: `0x30` |
-| `0x04` enumerateCredentialsBegin | yes | params `{1: rpIDHash}`. `{6: user, 7: credentialID, 8: publicKey, 9: totalCredentials, 10: credProtect}`, `credProtect` only if stored. None: `0x2E`. |
+| `0x04` enumerateCredentialsBegin | yes | params `{1: rpIDHash}`. `{6: user, 7: credentialID, 8: publicKey, 9: totalCredentials, 10: credProtect}`, `user` as the site stored it, `credProtect` only if stored. None: `0x2E`. |
 | `0x05` enumerateCredentialsGetNextCredential | no | as begin without `9`; past the end or without a begin: `0x30` |
 | `0x06` deleteCredential | yes | params `{2: credentialID}`. The phone shows site and account and waits for a tap: deleting is final, keys are not backed up. Declined: `0x27`; 60 s: `0x2F`; unknown: `0x2E`. Deletes the credential and its Secure Enclave key. |
 | `0x07` updateUserInformation | yes | params `{2: credentialID, 3: user}`. `user.id` must match, else `0x02`. Replaces `name` and `displayName`, no prompt. |
@@ -513,51 +591,10 @@ command) answers `0x01` (`INVALID_COMMAND`).
 The phone shows the host's name and waits for a tap: `0x00`. Declined: `0x27`.
 No answer within 60 s: `0x2F`.
 
-### U2F over CTAPHID MSG (3c)
-
-`ctap.request` with `cmd` 3 carries a U2F request APDU, `ctap.response` the
-response APDU (data, then the two status bytes). Short and extended length
-encodings are accepted.
-
-| Status word | Value |
-|---|---|
-| `SW_NO_ERROR` | `0x9000` |
-| `SW_CONDITIONS_NOT_SATISFIED` | `0x6985` |
-| `SW_COMMAND_NOT_ALLOWED` | `0x6986` |
-| `SW_WRONG_DATA` | `0x6A80` |
-| `SW_WRONG_LENGTH` | `0x6700` |
-| `SW_INS_NOT_SUPPORTED` | `0x6D00` |
-| `SW_CLA_NOT_SUPPORTED` | `0x6E00` |
-
-- `U2F_VERSION` (`INS 0x03`): `U2F_V2`.
-- `U2F_REGISTER` (`INS 0x01`, any `P1`): `challenge (32) || application (32)`.
-  The phone creates a non-discoverable credential bound to the application
-  parameter and answers `0x05 || public key (65) || key handle length ||
-  key handle || certificate || signature`, signed over `0x00 || application ||
-  challenge || key handle || public key`. The key handle is the credential ID.
-  The certificate is self-signed by a P-256 key that the phone creates in the
-  Secure Enclave for this one registration and deletes afterwards. This
-  attestation is **not a manufacturer statement**: there is no batch key and no
-  certificate in the repository, and nothing links two registrations.
-- `U2F_AUTHENTICATE` (`INS 0x02`): `challenge (32) || application (32) ||
-  length || key handle`. Unknown key handle, or bound to another application:
-  `0x6A80`. `P1 0x07` (check only): `0x6985` if the key handle is known.
-  `P1 0x03` and `0x08`: Touch ID, then `0x01 || counter (4, big-endian) ||
-  signature`, signed with the credential key over `application || 0x01 ||
-  counter || challenge`. `0x08` gets Touch ID too; the phone cannot sign without it.
-- **User presence by polling**, as U2F clients expect: the first request opens
-  the prompt and gets `0x6985` at once. Repeats of the same request get
-  `0x6985` while the prompt is open, and the result once Touch ID has
-  succeeded (for 10 s). Declined or failed: `0x6986`. If no repeat arrives for
-  3 s, the phone closes the prompt.
-- U2F gives the phone only a hash of the site. The prompt shows the host's
-  name and, if the credential was made over CTAP2, the site; otherwise "unknown
-  site".
-
 ### Other commands
 
 `authenticatorReset` (`0x07`) answers `0x30` (`NOT_ALLOWED`): credentials are
-only deleted in the app, or one at a time with confirmation (3b). Anything else
+deleted only in the app, or one at a time with confirmation (3b). Anything else
 answers `0x01` (`INVALID_COMMAND`).
 
 All commands that wait for the user can be cancelled with `ctap.cancel`
@@ -569,19 +606,15 @@ The host creates a virtual USB HID device (usage page `0xF1D0`) only while a
 session with the phone is up, so applications see the key appear and disappear
 like a real one. While a CBOR request waits for the phone it sends
 `CTAPHID_KEEPALIVE` with status `UPNEEDED` every 100 ms, and it forwards
-`CTAPHID_CANCEL` as `ctap.cancel`. CBOR is carried as is; steps 3a and 3b need
-nothing else from the host.
-
-CTAPHID `MSG` (U2F): the host reads `authenticatorGetInfo` once per session. If
-`versions` lists `U2F_V2` (3c), `CTAPHID_INIT` reports the capabilities without
-`NMSG` and `MSG` is forwarded as `cmd` 3, without keepalives (the phone answers
-at once, see polling above). Otherwise it keeps `NMSG` and answers `MSG` with
-`ERR_INVALID_CMD`, as in Phase 2.
+`CTAPHID_CANCEL` as `ctap.cancel`. CBOR is carried as is; Phase 3 needs nothing
+else from the host. CTAPHID `MSG` (U2F) is not supported (`NMSG` capability).
 
 `hmac-secret` with `systemd-cryptenroll` works for volumes opened after login,
 while `phonekey fido run` is running. Unlocking the root volume at boot would
 need the daemon and usbmuxd in the initramfs and is not covered. Keep the
-LUKS passphrase: the secret exists only on the phone.
+LUKS passphrase: the secret exists only on the phone. Once a PIN exists (3c),
+`systemd-cryptenroll` asks for it by default; for Touch ID alone enroll with
+`--fido2-with-client-pin=no --fido2-with-user-verification=yes`.
 
 ## 11. Changes
 
@@ -589,4 +622,4 @@ LUKS passphrase: the secret exists only on the phone.
 |---|---|
 | 1 | first version: session, pairing, hello, ping, status, photo |
 | 1 + `fido` | `ctap.request`, `ctap.response`, `ctap.cancel` (Phase 2) |
-| 1 + `fido`, Phase 3 | `cmd` 3 (MSG) for U2F; authenticator behaviour of steps 3a–3c in §10. No message changes otherwise. |
+| 1 + `fido`, Phase 3 | Authenticator behaviour of steps 3a–3c in §10 (`hmac-secret`, `pinUvAuthToken`, credential management, PIN). No message changes. |
