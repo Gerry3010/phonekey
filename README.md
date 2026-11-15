@@ -40,6 +40,12 @@ diagrams of every flow is in [docs/how-it-works.de.html](docs/how-it-works.de.ht
   credential management and `authenticatorSelection`. `fido2-token -L` and `-D`
   list and delete passkeys with Touch ID alone, no PIN. Verified in an Ubuntu
   VM with libfido2 and python-fido2 against the Simulator.
+- **Phase 3c:** a PIN for `ssh-keygen -K`, `ssh-add -K` and Chrome's key
+  management, which insist on one. It only works together with Touch ID: every
+  token issued against the PIN also needs Touch ID on the phone. Set it from the
+  computer (`fido2-token -S`) or in the app. Verified in an Ubuntu VM against the
+  Simulator (OpenSSH resident and `verify-required` keys with PIN, `-K`, LUKS
+  without PIN).
 
 The roadmap is in [docs/architecture.md](docs/architecture.md#roadmap).
 
@@ -70,6 +76,10 @@ docs/           architecture, wire protocol, test vectors
   the app's memory. At rest it is encrypted to the credential's Secure Enclave
   key, and decrypting it needs the same Touch ID as the signature. Keep your
   LUKS passphrase: if the phone or the key is lost, the secret is gone.
+- The PIN (Phase 3c) is there because some programs insist on one; it never
+  replaces Touch ID. The phone keeps only a hash of it, encrypted to a Secure
+  Enclave key, so every PIN check needs Touch ID: the computer cannot guess the
+  PIN without your finger, and the PIN alone unlocks nothing.
 - There is no vendor attestation, so services that only accept certified keys
   will reject phonekey.
 - The iPhone 7 (A10) has the unpatchable checkm8 bootrom flaw. A stolen phone

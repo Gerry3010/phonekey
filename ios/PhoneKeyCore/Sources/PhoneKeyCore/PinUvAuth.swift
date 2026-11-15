@@ -130,6 +130,8 @@ public final class CTAPSession: @unchecked Sendable {
     private var token: Token?
     private var sites: [Site]?
     private var credentials: [StoredCredential]?
+    /// Wrong PINs in a row on this connection (§10, "Retries").
+    private var wrongPins = 0
 
     public init() {}
 
@@ -147,6 +149,30 @@ public final class CTAPSession: @unchecked Sendable {
         keyAgreement = nil
         sites = nil
         credentials = nil
+        wrongPins = 0
+    }
+
+    // MARK: PIN (3c)
+
+    /// Three wrong PINs in a row block PIN use until the host reconnects.
+    var pinAuthBlocked: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return wrongPins >= Authenticator.wrongPinsPerSession
+    }
+
+    /// A wrong PIN also replaces the key agreement key (CTAP 2.1).
+    func pinFailed() {
+        lock.lock()
+        defer { lock.unlock() }
+        wrongPins += 1
+        keyAgreement = nil
+    }
+
+    func pinSucceeded() {
+        lock.lock()
+        defer { lock.unlock() }
+        wrongPins = 0
     }
 
     /// The key agreement key, created when first needed, never stored.
@@ -174,15 +200,21 @@ public final class CTAPSession: @unchecked Sendable {
         var used = false
         /// The token's Touch ID when it signs: one key operation.
         var authorization: TouchIDAuthorization?
+        /// The PIN epoch it was issued in; a changed or removed PIN ends it.
+        let epoch: Int
+        /// getPinToken: its first operation shows the site and waits for a tap.
+        var confirmFirstUse: Bool
 
         init(value: Data, proto: PinUvAuthProtocol, permissions: UInt8, rpId: String?, issued: Date,
-             authorization: TouchIDAuthorization?) {
+             authorization: TouchIDAuthorization?, epoch: Int = 0, confirmFirstUse: Bool = false) {
             self.value = value
             self.proto = proto
             self.permissions = permissions
             self.rpId = rpId
             self.issued = issued
             self.authorization = authorization
+            self.epoch = epoch
+            self.confirmFirstUse = confirmFirstUse
         }
     }
 
@@ -201,6 +233,8 @@ public final class CTAPSession: @unchecked Sendable {
 
     struct TokenUse {
         let authorization: TouchIDAuthorization?
+        /// Show the site and wait for a tap before signing (getPinToken).
+        var needsTap = false
     }
 
     static let initialUsageLimit: TimeInterval = 30
@@ -220,14 +254,16 @@ public final class CTAPSession: @unchecked Sendable {
     /// `silent`: a getAssertion with up = false, allowed only within the
     /// first 30 s and not counted as a use, so it never extends them (§10).
     func useToken(param: Data, protocolNumber: Int?, message: Data, permission: UInt8,
-                  scope: TokenScope, silent: Bool = false, now: Date) throws -> TokenUse {
+                  scope: TokenScope, silent: Bool = false, epoch: Int = 0, now: Date) throws -> TokenUse {
         guard let number = protocolNumber else { throw CTAPStatus.missingParameter }
         guard let proto = PinUvAuthProtocol(rawValue: number) else { throw CTAPStatus.invalidParameter }
         lock.lock()
         defer { lock.unlock() }
         guard var current = token else { throw CTAPStatus.pinAuthInvalid }
         let age = now.timeIntervalSince(current.issued)
-        guard age >= 0, age < Self.maxUsagePeriod, current.used || age < Self.initialUsageLimit else {
+        guard age >= 0, age < Self.maxUsagePeriod, current.used || age < Self.initialUsageLimit,
+              current.epoch == epoch
+        else {
             current.authorization?.invalidate()
             token = nil
             throw CTAPStatus.pinAuthInvalid
@@ -238,6 +274,9 @@ public final class CTAPSession: @unchecked Sendable {
               !silent || age < Self.initialUsageLimit
         else { throw CTAPStatus.pinAuthInvalid }
         let signs = permission & (TokenPrompt.makeCredential | TokenPrompt.getAssertion) != 0
+        // A silent assertion never shows the site, so it needs a token whose
+        // prompt named it (not one from getPinToken).
+        if silent, current.rpId == nil { throw CTAPStatus.unsupportedOption }
         switch scope {
         case let .rpId(rpId):
             if let bound = current.rpId {
@@ -254,9 +293,13 @@ public final class CTAPSession: @unchecked Sendable {
         case .any:
             break
         }
-        if !silent { current.used = true }
+        let needsTap = signs && !silent && current.confirmFirstUse
+        if !silent {
+            current.used = true
+            current.confirmFirstUse = false
+        }
         token = current
-        return TokenUse(authorization: signs ? current.authorization : nil)
+        return TokenUse(authorization: signs ? current.authorization : nil, needsTap: needsTap)
     }
 
     /// After a makeCredential or getAssertion with user presence, whatever

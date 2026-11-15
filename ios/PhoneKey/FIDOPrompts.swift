@@ -23,6 +23,8 @@ final class FIDOPrompts: ObservableObject {
         case token(TokenPrompt)
         /// Credential management deletes a passkey: a tap.
         case deletion(StoredCredential)
+        /// A PIN request (3c): set, change, or a token against the PIN.
+        case pin(PinPrompt)
     }
 
     /// How a prompt ended. `authorization` is a token's Touch ID that may
@@ -102,6 +104,8 @@ final class FIDOPrompts: ObservableObject {
         var signs = false
         switch active.kind {
         case let .registration(prompt):
+            // A token already carried the Touch ID: the card only confirms the site.
+            guard !prompt.verified else { return }
             reason = prompt.passkey ? "Create a passkey for \(prompt.rpId)" : "Register this key with \(prompt.rpId)"
         case let .signIn(prompt):
             // A token already carried the Touch ID: the card only picks the account.
@@ -111,6 +115,12 @@ final class FIDOPrompts: ObservableObject {
         case let .token(prompt):
             reason = Self.tokenPurpose(prompt)
             signs = prompt.signs
+        case let .pin(prompt):
+            reason = Self.pinPurpose(prompt)
+            // The stored PIN hash is encrypted to a Secure Enclave key with the
+            // keys' Touch ID rule: this Touch ID must decrypt it (and, for a
+            // token that signs, sign once). Setting a PIN only confirms.
+            signs = prompt != .set
         case .excluded, .selection, .deletion:
             return
         }
@@ -176,6 +186,22 @@ final class FIDOPrompts: ObservableObject {
         case 0: return "List and delete passkeys on this iPhone"
         default: return "Register or sign in at \(site)"
         }
+    }
+
+    /// What a PIN request is for, in the card and the Touch ID sheet.
+    static func pinPurpose(_ prompt: PinPrompt) -> String {
+        switch prompt {
+        case .set: return "Set a PIN for this security key"
+        case .change: return "Change the security key PIN"
+        case let .token(token): return token.signs ? tokenPurpose(token) + " with your PIN" : "Manage passkeys with your PIN"
+        case .legacyToken: return "Register or sign in with your PIN"
+        }
+    }
+
+    /// A registration after a getPinToken token: the tap that confirms the site.
+    func confirmVerifiedRegistration() {
+        guard case let .registration(prompt) = active?.kind, prompt.verified else { return }
+        approve(with: nil)
     }
 
     /// Sign-in with several accounts: picks one from the list and opens Touch ID
@@ -298,6 +324,15 @@ final class FIDOPrompts: ObservableObject {
         case let .deletion(credential):
             approvedSummary = "Deleted \(credential.accountLabel) from \(credential.rpId)"
             finish(.approved, nil)
+        case let .pin(prompt):
+            // The authenticator decides what the Touch ID is still needed for.
+            authContext = nil
+            switch prompt {
+            case .set: approvedSummary = "PIN set"
+            case .change: approvedSummary = "PIN changed"
+            case .token, .legacyToken: break
+            }
+            finish(.approved, nil, authorization: context)
         case .excluded, .selection:
             finish(.approved, nil)
         }
@@ -315,10 +350,13 @@ final class FIDOPrompts: ObservableObject {
         case .biometryNotEnrolled, .biometryNotAvailable:
             note = "Set up Touch ID in Settings first."
         case .biometryLockout:
-            if case .token = active?.kind {
-                // A token request answers UV_BLOCKED right away (§10).
+            switch active?.kind {
+            case .token, .pin:
+                // A token or PIN request answers UV_BLOCKED right away (§10).
                 finish(.denied, nil, blocked: true)
                 return
+            default:
+                break
             }
             note = "Touch ID is locked. Unlock the iPhone with its passcode, then try again."
         case .authenticationFailed:
@@ -385,7 +423,9 @@ final class FIDOPrompts: ObservableObject {
             self?.finish(.timedOut, nil)
         }
         switch kind {
-        case .registration, .token:
+        case let .registration(prompt) where !prompt.verified:
+            authenticate()
+        case .token, .pin:
             authenticate()
         case let .signIn(prompt) where chosen != nil && !prompt.verified:
             authenticate()
@@ -414,7 +454,7 @@ final class FIDOPrompts: ObservableObject {
 
 extension FIDOPrompts: AuthenticatorUI {
     nonisolated func confirmRegistration(_ prompt: RegistrationPrompt) async -> UserDecision {
-        if prompt.verified {
+        if prompt.verified, !prompt.confirmByTap {
             await MainActor.run {
                 noteVerified(prompt.passkey ? "Passkey created for \(prompt.rpId)" : "Key registered with \(prompt.rpId)")
             }
@@ -424,7 +464,7 @@ extension FIDOPrompts: AuthenticatorUI {
     }
 
     nonisolated func chooseCredential(_ prompt: SignInPrompt) async -> (UserDecision, StoredCredential?) {
-        if prompt.verified, prompt.candidates.count == 1, let only = prompt.candidates.first {
+        if prompt.verified, !prompt.confirmByTap, prompt.candidates.count == 1, let only = prompt.candidates.first {
             await MainActor.run { noteVerified("Signed in to \(prompt.rpId) as \(only.accountLabel)") }
             return (.approved, only)
         }
@@ -442,6 +482,15 @@ extension FIDOPrompts: AuthenticatorUI {
 
     nonisolated func authorizeToken(_ prompt: TokenPrompt) async -> TokenDecision {
         let outcome = await present(.token(prompt))
+        switch outcome.decision {
+        case .approved: return .approved(authorization: outcome.authorization)
+        case .denied: return outcome.blocked ? .blocked : .denied
+        case .timedOut: return .timedOut
+        }
+    }
+
+    nonisolated func authorizePin(_ prompt: PinPrompt) async -> TokenDecision {
+        let outcome = await present(.pin(prompt))
         switch outcome.decision {
         case .approved: return .approved(authorization: outcome.authorization)
         case .denied: return outcome.blocked ? .blocked : .denied

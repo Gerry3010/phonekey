@@ -542,7 +542,9 @@ alone unlocks nothing.
   to a Secure Enclave key of its own (ECIES as for `hmac-secret`) that is
   usable only after Touch ID; `…ThisDeviceOnly`, never synced, never on the
   host. Comparing a PIN therefore always happens inside a Touch ID prompt, and
-  a copied Keychain alone does not allow guessing it offline.
+  a copied Keychain alone does not allow guessing it offline. The PIN key has
+  the same Touch ID rule as the credential keys, so the prompt's one Touch ID
+  both decrypts the stored hash and, for a token with `mc`/`ga`, signs.
 - **Policy.** At least 4 Unicode code points (`minPINLength` counts code
   points) and at most 63 bytes of UTF-8 (`newPinEnc` is the PIN padded with
   zeros to 64 bytes, as in CTAP). Otherwise: `0x37` (`PIN_POLICY_VIOLATION`).
@@ -557,9 +559,10 @@ alone unlocks nothing.
   set: `0x33` (`PIN_AUTH_INVALID`), as CTAP 2.1 §6.5.5.5 says. The phone shows
   the host's name, asks for Touch ID, then stores the PIN.
 - **changePIN** (`0x04`): adds `pinHashEnc` (key 6); `pinUvAuthParam` =
-  `authenticate(shared secret, newPinEnc || pinHashEnc)`. Touch ID, then the
-  old PIN is checked (retries as above), then the new one stored. Every token
-  of every session is invalidated.
+  `authenticate(shared secret, newPinEnc || pinHashEnc)`. A new PIN that
+  breaks the policy is refused (`0x37`) before anything is shown, so it costs
+  no try. Otherwise Touch ID, then the old PIN is checked (retries as above),
+  then the new one stored. Every token of every session is invalidated.
 - **getPinToken** (`0x05`, for CTAP 2.0 clients): `keyAgreement`,
   `pinHashEnc`. Touch ID, then the PIN check; the token gets `mc` and `ga`
   without an RP ID. As in CTAP 2.1 it is bound to the `rp.id` of its first
@@ -574,7 +577,8 @@ alone unlocks nothing.
 - **Forgotten or blocked PIN.** Reset in the app with Touch ID: only the PIN is
   removed, the keys stay. `authenticatorReset` stays `0x30`.
 - **In the app** the PIN can also be set, changed and removed, always with
-  Touch ID.
+  Touch ID. Setting or changing it there needs only Touch ID, not the old PIN.
+  Changing or removing it invalidates every token, as `changePIN` does.
 
 #### Using a pinUvAuthToken
 
@@ -614,7 +618,9 @@ From 3b, a makeCredential or getAssertion with a non-empty `pinUvAuthParam`:
   WebAuthn sites reject assertions without UP, so such a signature signs
   nobody in. OpenSSH rejects it too, unless the key was made with
   `no-touch-required`. Without a token, `up = false` stays as described under
-  getAssertion.
+  getAssertion. A token from `getPinToken` (`0x05`), whose prompt could not name
+  the site, gets `0x2B` (`UNSUPPORTED_OPTION`): the phone never signs for a
+  site it has not shown.
 
 A `pinUvAuthParam` together with `options.uv = true` is treated as if `uv` were
 absent.

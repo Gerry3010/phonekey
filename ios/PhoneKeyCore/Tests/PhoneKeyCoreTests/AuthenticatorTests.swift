@@ -26,6 +26,17 @@ final class MemoryStore: CredentialStore {
     func delete(id: Data) throws { items.removeAll { $0.id == id } }
 }
 
+final class MemoryPinStorage: PinStorage {
+    var record: PinRecord?
+    var failRead = false
+
+    func loadPin() throws -> PinRecord? {
+        if failRead { throw CTAPStatus.other }
+        return record
+    }
+    func savePin(_ record: PinRecord?) throws { self.record = record }
+}
+
 final class SoftwareKeys: CredentialKeys {
     var keys: [Data: P256.Signing.PrivateKey] = [:]
     var denySigning = false
@@ -116,6 +127,19 @@ final class ScriptedUI: AuthenticatorUI {
         return tokenDecision
     }
 
+    /// Each PIN prompt gets a fresh Touch ID unless `pinDecision` is set.
+    var pinDecision: TokenDecision?
+    var pinPrompts: [PinPrompt] = []
+    var pinAuthorizations: [Authorization] = []
+
+    func authorizePin(_ prompt: PinPrompt) async -> TokenDecision {
+        pinPrompts.append(prompt)
+        if let pinDecision { return pinDecision }
+        let touchID = Authorization()
+        pinAuthorizations.append(touchID)
+        return .approved(authorization: touchID)
+    }
+
     func confirmDeletion(_ credential: StoredCredential) async -> UserDecision {
         deletions.append(credential)
         return decision
@@ -136,7 +160,8 @@ final class AuthenticatorTests: XCTestCase {
         store = MemoryStore()
         keys = SoftwareKeys()
         ui = ScriptedUI()
-        authenticator = Authenticator(store: store, keys: keys, ui: ui, now: { [unowned self] in self.clock })
+        authenticator = Authenticator(store: store, keys: keys, ui: ui, pins: MemoryPinStorage(),
+                                      now: { [unowned self] in self.clock })
         session = CTAPSession()
     }
 
@@ -198,7 +223,7 @@ final class AuthenticatorTests: XCTestCase {
         XCTAssertEqual(info?[3]?.bytes, Authenticator.aaguid)
         XCTAssertEqual(info?[4]?["rk"], .bool(true))
         XCTAssertEqual(info?[4]?["uv"], .bool(true))
-        XCTAssertNil(info?[4]?["clientPin"])
+        XCTAssertEqual(info?[4]?["clientPin"], .bool(false), "no PIN set yet")
         XCTAssertEqual(info?[10]?.array?.first?["alg"]?.int, -7)
         // Chrome batches allow lists only with both of these (§10).
         XCTAssertEqual(info?[7]?.int, 16)
@@ -415,7 +440,8 @@ final class AuthenticatorTests: XCTestCase {
         let (_, info) = await call(0x04, nil)
         XCTAssertEqual(info?[1], .array([.text("FIDO_2_0"), .text("FIDO_2_1")]))
         XCTAssertEqual(info?[6], .array([.int(2), .int(1)]))
-        XCTAssertNil(info?[4]?["clientPin"], "no PIN before 3c")
+        XCTAssertEqual(info?[4]?["clientPin"], .bool(false), "3c: false until a PIN is set")
+        XCTAssertEqual(info?[13]?.int, 4, "minPINLength")
         XCTAssertEqual(info?[4]?["pinUvAuthToken"], .bool(true))
         XCTAssertEqual(info?[4]?["credMgmt"], .bool(true))
         XCTAssertNil(info?[4]?["alwaysUv"])
@@ -446,10 +472,12 @@ final class AuthenticatorTests: XCTestCase {
         XCTAssertEqual(status, CTAPStatus.invalidParameter.rawValue)
         (status, _) = await call(0x06, .map([.int(1): .int(2)]))
         XCTAssertEqual(status, CTAPStatus.missingParameter.rawValue)
-        for subCommand in [0x01, 0x03, 0x04, 0x05, 0x09] {
+        for subCommand in [0x00, 0x08, 0x0A] {
             (status, _) = await call(0x06, .map([.int(1): .int(1), .int(2): .int(subCommand)]))
             XCTAssertEqual(status, CTAPStatus.invalidSubcommand.rawValue, "subCommand \(subCommand)")
         }
+        (status, _) = await call(0x06, .map([.int(1): .int(1), .int(2): .int(1)]))
+        XCTAssertEqual(status, CTAPStatus.pinNotSet.rawValue, "getPINRetries without a PIN")
     }
 
     /// Phase 2 answered 0x36 (PUAT_REQUIRED) here; PIN_AUTH_INVALID is 0x33.
@@ -516,7 +544,7 @@ final class AuthenticatorTests: XCTestCase {
             store = MemoryStore()
             keys = SoftwareKeys()
             ui = ScriptedUI()
-            authenticator = Authenticator(store: store, keys: keys, ui: ui)
+            authenticator = Authenticator(store: store, keys: keys, ui: ui, pins: MemoryPinStorage())
             session = CTAPSession()
             let (id, publicKey) = try await registerWithHmacSecret()
             let credRandom = try XCTUnwrap(keys.sealed[try XCTUnwrap(store.credential(id: id)?.hmacSecret)])

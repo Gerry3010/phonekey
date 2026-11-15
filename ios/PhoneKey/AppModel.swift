@@ -1,5 +1,6 @@
 import AVFoundation
 import CryptoKit
+@preconcurrency import LocalAuthentication
 import os
 import PhoneKeyCore
 import SwiftUI
@@ -58,7 +59,7 @@ final class AppModel: ObservableObject {
         let keys = SecureEnclaveKeys(handoff: handoff)
         credentials = KeychainCredentialStore(keys: keys)
         fidoPrompts.credentials = credentials
-        authenticator = Authenticator(store: credentials, keys: keys, ui: fidoPrompts)
+        authenticator = Authenticator(store: credentials, keys: keys, ui: fidoPrompts, pins: KeychainPinStorage())
 
         do {
             let identity = try Identity.load()
@@ -191,6 +192,32 @@ final class AppModel: ObservableObject {
     private func cancelCTAP(_ id: UInt64?, session: ObjectIdentifier) {
         guard let job = ctapJob, job.session == session, job.id == id else { return }
         job.task.cancel()
+    }
+
+    // MARK: PIN in the app (§10, "PIN (3c)")
+
+    /// nil when the keychain cannot be read.
+    func pinState() -> PinState? {
+        try? authenticator.pinState()
+    }
+
+    /// Sets or replaces the PIN. The caller has just asked for Touch ID.
+    func setPin(_ pin: String) throws {
+        try authenticator.setPinOnPhone(pin)
+    }
+
+    /// Removes a forgotten or blocked PIN; the keys stay.
+    func removePin() throws {
+        try authenticator.removePin()
+    }
+
+    /// Touch ID for a change made in the app.
+    func confirmWithTouchID(_ reason: String) async -> Bool {
+        let context = LAContext()
+        context.localizedFallbackTitle = ""
+        defer { context.invalidate() }
+        return (try? await context.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics,
+                                                   localizedReason: reason)) == true
     }
 
     /// A connection ended: whatever it asked for is no longer wanted.

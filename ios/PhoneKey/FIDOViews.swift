@@ -97,7 +97,19 @@ struct FIDOPromptOverlay: View {
             if let account = p.userName ?? p.userDisplayName {
                 Label(account, systemImage: "person.crop.circle").foregroundColor(.secondary)
             }
-            touchIDButtons()
+            if p.verified {
+                // PIN and Touch ID are done (getPinToken): only the site to confirm.
+                VStack(spacing: 8) {
+                    Button(action: prompts.confirmVerifiedRegistration) {
+                        Text(p.passkey ? "Create passkey" : "Register").frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+                    declineButton()
+                }
+            } else {
+                touchIDButtons()
+            }
 
         case let .signIn(p):
             Text("Sign in to").font(.title3.bold())
@@ -149,6 +161,9 @@ struct FIDOPromptOverlay: View {
             }
             touchIDButtons()
 
+        case let .pin(p):
+            pinCard(p)
+
         case let .deletion(credential):
             Text("Delete this passkey?").font(.title3.bold())
             site(credential.rpId, name: ownSiteName(credential.rpId))
@@ -181,6 +196,39 @@ struct FIDOPromptOverlay: View {
                 .foregroundColor(.secondary)
             buttons(primary: "Use PhoneKey", action: prompts.acknowledge)
         }
+    }
+
+    @ViewBuilder
+    private func pinCard(_ prompt: PinPrompt) -> some View {
+        switch prompt {
+        case .set:
+            Text("Set a PIN").font(.title3.bold())
+            explanation("The computer wants to set a PIN for this security key. ssh and Chrome ask for it; "
+                + "it never replaces Touch ID, every use still needs Touch ID here.")
+        case .change:
+            Text("Change the PIN").font(.title3.bold())
+            explanation("After Touch ID the old PIN the computer sent is checked, then the new one is stored.")
+        case let .token(token):
+            Text(token.signs ? FIDOPrompts.tokenPurpose(token) : "Manage passkeys").font(.title3.bold())
+            if let rpId = token.rpId {
+                site(rpId, name: ownSiteName(rpId))
+            }
+            explanation(token.signs
+                ? "With the PIN entered on the computer. Touch ID checks it."
+                : "With the PIN entered on the computer: list passkeys and maybe delete some. "
+                    + "Each deletion asks you again.")
+        case .legacyToken:
+            Text("Register or sign in").font(.title3.bold())
+            explanation("With the PIN entered on the computer. The site is shown before anything is signed.")
+        }
+        touchIDButtons()
+    }
+
+    private func explanation(_ text: String) -> some View {
+        Text(text)
+            .font(.callout)
+            .multilineTextAlignment(.center)
+            .foregroundColor(.secondary)
     }
 
     /// "Which account?": the suggested accounts first, then the others, each

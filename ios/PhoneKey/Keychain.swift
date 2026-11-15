@@ -36,6 +36,12 @@ enum Keychain {
         }
     }
 
+    /// Removes the item; a missing one is fine.
+    static func delete(_ account: String) throws {
+        let status = SecItemDelete(base(account) as CFDictionary)
+        guard status == errSecSuccess || status == errSecItemNotFound else { throw Failure(status: status) }
+    }
+
     private static func base(_ account: String) -> [String: Any] {
         [
             kSecClass as String: kSecClassGenericPassword,
