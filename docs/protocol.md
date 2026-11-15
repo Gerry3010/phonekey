@@ -521,10 +521,11 @@ context with the token. It serves exactly one operation: the signature, plus
 the `hmac-secret` decryption in the same request. It is invalidated when the
 token loses `mc`/`ga`, when the token expires, and when the session ends, so a
 token's lifetime never means keys stay unlocked. A token with only `cm` keeps
-no context. Whether a `.useKeySign` context also covers the ECIES decryption
-(a key exchange in the Enclave) is checked on the iPhone first thing in 3a and
-written down here; if it does not, the decryption gets its own evaluation
-inside the same prompt.
+no context. A `.useKeySign` context also covers the ECIES decryption (a key
+exchange in the Enclave) with the same key: checked on the iPhone 7 with
+iOS 15.8.2 on 15 Nov 2026, with further prompts forbidden after the one
+Touch ID (`interactionNotAllowed`); decryption and signature both succeeded,
+and the same holds the other way round for a `.useKeyKeyExchange` context.
 
 #### PIN (3c)
 
