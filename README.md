@@ -31,8 +31,11 @@ diagrams of every flow is in [docs/how-it-works.de.html](docs/how-it-works.de.ht
   (Secure Enclave, Touch ID per use); `phonekey fido run` exposes it on Linux as
   a USB security key. Verified in an Ubuntu VM with libfido2 and OpenSSH
   (`ssh-keygen -t ecdsa-sk`, resident and `verify-required`), and on the iPhone 7
-  with real Touch ID through `phonekey fido selftest`. Not yet tried in a browser
-  on real Linux hardware.
+  with real Touch ID through `phonekey fido selftest`. Chrome and Firefox on real
+  Linux work.
+- **Phase 3a:** `hmac-secret` with PIN/UV auth protocols 1 and 2, for LUKS
+  through `systemd-cryptenroll`. Verified in an Ubuntu VM (enroll and unlock a
+  LUKS2 file) and on the iPhone 7 (one Touch ID per unlock).
 
 The roadmap is in [docs/architecture.md](docs/architecture.md#roadmap).
 
@@ -58,6 +61,11 @@ docs/           architecture, wire protocol, test vectors
 
 - Private keys are created in the Secure Enclave and never leave it. Every
   signature needs Touch ID.
+- The `hmac-secret` behind a LUKS unlock is different: the Secure Enclave cannot
+  compute HMAC, so for that moment the 32-byte secret exists in plain text in
+  the app's memory. At rest it is encrypted to the credential's Secure Enclave
+  key, and decrypting it needs the same Touch ID as the signature. Keep your
+  LUKS passphrase: if the phone or the key is lost, the secret is gone.
 - There is no vendor attestation, so services that only accept certified keys
   will reject phonekey.
 - The iPhone 7 (A10) has the unpatchable checkm8 bootrom flaw. A stolen phone

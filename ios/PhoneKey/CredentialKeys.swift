@@ -100,6 +100,63 @@ final class SecureEnclaveKeys: CredentialKeys {
         }
     }
 
+    /// ECIES as the Secure Enclave does it (X9.63 SHA-256, AES-GCM).
+    private static let ecies = SecKeyAlgorithm.eciesEncryptionCofactorVariableIVX963SHA256AESGCM
+
+    func encrypt(toPublicKey x963: Data, plaintext: Data) throws -> Data {
+        var error: Unmanaged<CFError>?
+        let attributes: [String: Any] = [
+            kSecAttrKeyType as String: kSecAttrKeyTypeECSECPrimeRandom,
+            kSecAttrKeyClass as String: kSecAttrKeyClassPublic,
+            kSecAttrKeySizeInBits as String: 256,
+        ]
+        guard let publicKey = SecKeyCreateWithData(x963 as CFData, attributes as CFDictionary, &error),
+              let sealed = SecKeyCreateEncryptedData(publicKey, Self.ecies, plaintext as CFData, &error) as Data?
+        else { throw error!.takeRetainedValue() as Error }
+        return sealed
+    }
+
+    /// Normally the sign-in card has just done Touch ID: the decryption uses
+    /// that context and leaves it for the signature. Without one it asks itself
+    /// and hands its own context on, so a sign-in still needs one Touch ID.
+    func decrypt(id: Data, ciphertext: Data, reason: String) async throws -> Data {
+        let handed = handoff?.peek()
+        let context = handed ?? LAContext()
+        if handed == nil {
+            context.localizedReason = reason
+            context.localizedCancelTitle = "Cancel"
+            context.localizedFallbackTitle = ""
+        }
+        let plain: Data = try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Data, Error>) in
+                DispatchQueue.global(qos: .userInitiated).async {
+                    let query: [String: Any] = [
+                        kSecClass as String: kSecClassKey,
+                        kSecAttrApplicationTag as String: Self.tag(id),
+                        kSecAttrKeyType as String: kSecAttrKeyTypeECSECPrimeRandom,
+                        kSecReturnRef as String: true,
+                        kSecUseAuthenticationContext as String: context,
+                    ]
+                    var item: CFTypeRef?
+                    guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess, let item else {
+                        return continuation.resume(throwing: CTAPStatus.noCredentials)
+                    }
+                    var error: Unmanaged<CFError>?
+                    if let plain = SecKeyCreateDecryptedData(item as! SecKey, Self.ecies,
+                                                             ciphertext as CFData, &error) as Data? {
+                        continuation.resume(returning: plain)
+                    } else {
+                        continuation.resume(throwing: CTAPStatus.operationDenied)
+                    }
+                }
+            }
+        } onCancel: {
+            context.invalidate()
+        }
+        if handed == nil { handoff?.put(context) }
+        return plain
+    }
+
     func deleteKey(id: Data) {
         SecItemDelete([
             kSecClass as String: kSecClassKey,

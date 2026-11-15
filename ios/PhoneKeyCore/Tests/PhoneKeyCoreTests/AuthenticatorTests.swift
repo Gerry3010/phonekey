@@ -36,6 +36,28 @@ final class SoftwareKeys: CredentialKeys {
         return try key.signature(for: data).derRepresentation
     }
 
+    /// Stands in for ECIES: the "ciphertext" is a random handle for the
+    /// plaintext, so tests can check which secret was used.
+    var sealed: [Data: Data] = [:]
+    var denyDecrypt = false
+    var decryptCalls = 0
+
+    func encrypt(toPublicKey x963: Data, plaintext: Data) throws -> Data {
+        guard keys.values.contains(where: { $0.publicKey.x963Representation == x963 }) else {
+            throw CTAPStatus.noCredentials
+        }
+        let handle = Data((0..<48).map { _ in UInt8.random(in: 0...255) })
+        sealed[handle] = plaintext
+        return handle
+    }
+
+    func decrypt(id: Data, ciphertext: Data, reason: String) async throws -> Data {
+        decryptCalls += 1
+        if denyDecrypt { throw CTAPStatus.operationDenied }
+        guard keys[id] != nil, let plain = sealed[ciphertext] else { throw CTAPStatus.noCredentials }
+        return plain
+    }
+
     func deleteKey(id: Data) { keys[id] = nil }
 }
 
@@ -72,6 +94,7 @@ final class AuthenticatorTests: XCTestCase {
     private var keys: SoftwareKeys!
     private var ui: ScriptedUI!
     private var authenticator: Authenticator!
+    private var session: CTAPSession!
     private let clientDataHash = Data(SHA256.hash(data: Data("client data".utf8)))
 
     override func setUp() {
@@ -79,16 +102,17 @@ final class AuthenticatorTests: XCTestCase {
         keys = SoftwareKeys()
         ui = ScriptedUI()
         authenticator = Authenticator(store: store, keys: keys, ui: ui)
+        session = CTAPSession()
     }
 
     private func call(_ command: UInt8, _ params: CBOR?) async -> (UInt8, CBOR?) {
-        let response = await authenticator.handle(Data([command]) + (params?.encoded ?? Data()))
+        let response = await authenticator.handle(Data([command]) + (params?.encoded ?? Data()), session: session)
         let body = response.count > 1 ? try? CBOR.decode(Data(response.dropFirst())) : nil
         return (response[0], body)
     }
 
     private func makeCredentialParams(rk: Bool, user: String = "gerry", exclude: [Data] = [],
-                                      algs: [Int] = [-7]) -> CBOR {
+                                      algs: [Int] = [-7], hmacSecret: Bool = false) -> CBOR {
         var pairs: [CBOR.Pair] = [
             .init(.int(1), .bytes(clientDataHash)),
             .init(.int(2), .map([.text("id"): .text("github.com"), .text("name"): .text("GitHub")])),
@@ -99,6 +123,9 @@ final class AuthenticatorTests: XCTestCase {
         ]
         if !exclude.isEmpty {
             pairs.append(.init(.int(5), .array(exclude.map { .map([.text("id"): .bytes($0), .text("type"): .text("public-key")]) })))
+        }
+        if hmacSecret {
+            pairs.append(.init(.int(6), .map([.text("hmac-secret"): .bool(true)])))
         }
         return .map(pairs)
     }
@@ -286,10 +313,10 @@ final class AuthenticatorTests: XCTestCase {
         (status, _) = await call(0x08, nil)
         XCTAssertEqual(status, CTAPStatus.notAllowed.rawValue)
         (status, _) = await call(0x06, .map([.int(1): .int(1)]))
-        XCTAssertEqual(status, CTAPStatus.invalidCommand.rawValue)
+        XCTAssertEqual(status, CTAPStatus.missingParameter.rawValue, "clientPIN without subCommand (3a)")
         (status, _) = await call(0x42, nil)
         XCTAssertEqual(status, CTAPStatus.invalidCommand.rawValue)
-        let raw = await authenticator.handle(Data([0x01, 0xA1, 0x01]))
+        let raw = await authenticator.handle(Data([0x01, 0xA1, 0x01]), session: session)
         XCTAssertEqual(raw, Data([CTAPStatus.invalidCBOR.rawValue]))
         (status, _) = await call(0x02, .map([.int(1): .text("github.com")]))
         XCTAssertEqual(status, CTAPStatus.missingParameter.rawValue)
@@ -307,13 +334,14 @@ final class AuthenticatorTests: XCTestCase {
         XCTAssertEqual(status, 0)
         let authData = [UInt8](try XCTUnwrap(body?[2]?.bytes))
         XCTAssertEqual(authData[32], 0xC5, "flags UP|UV|AT|ED")
-        // Extensions follow the COSE key: {"credProtect": 2}, hmac-secret ignored.
-        XCTAssertEqual(Data(authData.suffix(14)), hex("a16b6372656450726f7465637402"))
+        // Extensions follow the COSE key: {"credProtect": 2, "hmac-secret": true} (3a).
+        XCTAssertEqual(Data(authData.suffix(27)),
+                       hex("a2" + "6b6372656450726f74656374" + "02" + "6b686d61632d736563726574" + "f5"))
         XCTAssertEqual(store.items.first?.credProtect, 2)
 
         let (info, getInfo) = await call(0x04, nil)
         XCTAssertEqual(info, 0)
-        XCTAssertEqual(getInfo?[2], .array([.text("credProtect")]))
+        XCTAssertEqual(getInfo?[2], .array([.text("credProtect"), .text("hmac-secret")]))
 
         // A level-2 passkey is still found without an allow list: Touch ID is always done.
         let (signIn, _) = await call(0x02, .map([.int(1): .text("github.com"), .int(2): .bytes(clientDataHash)]))
@@ -335,11 +363,181 @@ final class AuthenticatorTests: XCTestCase {
     func testCancelWhileWaiting() async throws {
         ui.waitForCancel = true
         let params = makeCredentialParams(rk: true).encoded
-        let task = Task { await self.authenticator.handle(Data([0x01]) + params) }
+        let session = self.session!
+        let task = Task { await self.authenticator.handle(Data([0x01]) + params, session: session) }
         try await Task.sleep(nanoseconds: 50_000_000)
         task.cancel()
         let response = await task.value
         XCTAssertEqual(response, Data([CTAPStatus.keepaliveCancel.rawValue]))
         XCTAssertTrue(store.items.isEmpty)
+    }
+    // MARK: Phase 3a: PIN/UV auth protocols and hmac-secret
+
+    func testGetInfoPhase3a() async {
+        let (_, info) = await call(0x04, nil)
+        XCTAssertEqual(info?[1], .array([.text("FIDO_2_0")]), "FIDO_2_1 comes with 3b")
+        XCTAssertEqual(info?[6], .array([.int(2), .int(1)]))
+        XCTAssertNil(info?[4]?["clientPin"])
+        XCTAssertNil(info?[4]?["pinUvAuthToken"])
+    }
+
+    func testGetKeyAgreementPerSession() async throws {
+        let params = CBOR.map([.int(1): .int(2), .int(2): .int(2)])
+        let (status, body) = await call(0x06, params)
+        XCTAssertEqual(status, 0)
+        let cose = try XCTUnwrap(body?[1])
+        XCTAssertEqual(cose[1]?.int, 2)
+        XCTAssertEqual(cose[3]?.int, -25)
+        XCTAssertEqual(cose[-1]?.int, 1)
+        let (_, again) = await call(0x06, .map([.int(1): .int(1), .int(2): .int(2)]))
+        XCTAssertEqual(again?[1], cose, "same key within the session, for both protocols")
+        session = CTAPSession()
+        let (_, other) = await call(0x06, params)
+        XCTAssertNotEqual(other?[1], cose, "a new session has its own key")
+    }
+
+    func testClientPINErrors() async {
+        var (status, _) = await call(0x06, .map([.int(2): .int(2)]))
+        XCTAssertEqual(status, CTAPStatus.missingParameter.rawValue)
+        (status, _) = await call(0x06, .map([.int(1): .int(3), .int(2): .int(2)]))
+        XCTAssertEqual(status, CTAPStatus.invalidParameter.rawValue)
+        (status, _) = await call(0x06, .map([.int(1): .int(2)]))
+        XCTAssertEqual(status, CTAPStatus.missingParameter.rawValue)
+        for subCommand in [0x01, 0x03, 0x04, 0x05, 0x06, 0x07, 0x09] {
+            (status, _) = await call(0x06, .map([.int(1): .int(1), .int(2): .int(subCommand)]))
+            XCTAssertEqual(status, CTAPStatus.invalidSubcommand.rawValue, "subCommand \(subCommand)")
+        }
+    }
+
+    /// Phase 2 answered 0x36 (PUAT_REQUIRED) here; PIN_AUTH_INVALID is 0x33.
+    func testNonEmptyPinUvAuthParamIsPinAuthInvalid() async throws {
+        var params = makeCredentialParams(rk: true)
+        if case var .map(pairs) = params {
+            pairs.append(.init(.int(8), .bytes(Data(repeating: 1, count: 16))))
+            pairs.append(.init(.int(9), .int(1)))
+            params = .map(pairs)
+        }
+        var (status, _) = await call(0x01, params)
+        XCTAssertEqual(status, 0x33)
+        (status, _) = await call(0x02, .map([.int(1): .text("github.com"), .int(2): .bytes(clientDataHash),
+                                             .int(6): .bytes(Data(repeating: 1, count: 16)), .int(7): .int(1)]))
+        XCTAssertEqual(status, 0x33)
+        (status, _) = await call(0x02, .map([.int(1): .text("github.com"), .int(2): .bytes(clientDataHash),
+                                             .int(6): .bytes(Data())]))
+        XCTAssertEqual(status, CTAPStatus.pinNotSet.rawValue, "zero length: authenticator selection")
+    }
+
+    /// What a platform sends for hmac-secret: its key agreement key and the
+    /// salts, encrypted and authenticated with the shared secret.
+    private func hmacSecretInput(_ proto: PinUvAuthProtocol, salts: [Data],
+                                 tamper: Bool = false) async throws -> (input: CBOR, shared: Data) {
+        let (_, ka) = await call(0x06, .map([.int(1): .int(proto.rawValue), .int(2): .int(2)]))
+        let cose = try XCTUnwrap(ka?[1])
+        let x963 = Data([0x04]) + (try XCTUnwrap(cose[-2]?.bytes)) + (try XCTUnwrap(cose[-3]?.bytes))
+        let phoneKey = try P256.KeyAgreement.PublicKey(x963Representation: x963)
+        let platform = P256.KeyAgreement.PrivateKey()
+        let shared = try proto.sharedSecret(platform, with: phoneKey)
+        let saltEnc = try proto.encrypt(key: shared, salts.reduce(Data(), +))
+        var saltAuth = proto.authenticate(key: shared, saltEnc)
+        if tamper { saltAuth[saltAuth.startIndex] ^= 1 }
+        let raw = [UInt8](platform.publicKey.x963Representation)
+        let platformKey = CBOR.map([.int(1): .int(2), .int(3): .int(-25), .int(-1): .int(1),
+                                    .int(-2): .bytes(Data(raw[1...32])), .int(-3): .bytes(Data(raw[33...64]))])
+        var input: [CBOR.Pair] = [.init(.int(1), platformKey), .init(.int(2), .bytes(saltEnc)),
+                                  .init(.int(3), .bytes(saltAuth))]
+        if proto == .two { input.append(.init(.int(4), .int(2))) }
+        return (.map(input), shared)
+    }
+
+    private func registerWithHmacSecret() async throws -> (id: Data, publicKey: P256.Signing.PublicKey) {
+        let (status, body) = await call(0x01, makeCredentialParams(rk: true, hmacSecret: true))
+        XCTAssertEqual(status, 0)
+        let authData = try XCTUnwrap(body?[2]?.bytes)
+        XCTAssertEqual(authData[authData.startIndex + 32], 0xC5, "flags UP|UV|AT|ED")
+        XCTAssertTrue(authData.suffix(from: authData.startIndex)
+            .ends(with: CBOR.map([.text("hmac-secret"): .bool(true)]).encoded))
+        let stored = try XCTUnwrap(store.items.last)
+        XCTAssertNotNil(stored.hmacSecret)
+        let x963 = try XCTUnwrap(keys.keys[stored.id]?.publicKey.x963Representation)
+        return (stored.id, try P256.Signing.PublicKey(x963Representation: x963))
+    }
+
+    private func assertion(hmac input: CBOR) async -> (UInt8, CBOR?) {
+        await call(0x02, .map([.int(1): .text("github.com"), .int(2): .bytes(clientDataHash),
+                               .int(4): .map([.text("hmac-secret"): input])]))
+    }
+
+    func testHmacSecretBothProtocols() async throws {
+        for proto in PinUvAuthProtocol.allCases {
+            // Fresh state per protocol (setUp() would pick XCTest's async variant here).
+            store = MemoryStore()
+            keys = SoftwareKeys()
+            ui = ScriptedUI()
+            authenticator = Authenticator(store: store, keys: keys, ui: ui)
+            session = CTAPSession()
+            let (id, publicKey) = try await registerWithHmacSecret()
+            let credRandom = try XCTUnwrap(keys.sealed[try XCTUnwrap(store.credential(id: id)?.hmacSecret)])
+            let salt1 = Data(repeating: 0xA1, count: 32), salt2 = Data(repeating: 0xB2, count: 32)
+            func expected(_ salt: Data) -> Data {
+                Data(HMAC<SHA256>.authenticationCode(for: salt, using: SymmetricKey(data: credRandom)))
+            }
+
+            var outputs: [Data] = []
+            for salts in [[salt1], [salt1], [salt1, salt2]] {
+                let (input, shared) = try await hmacSecretInput(proto, salts: salts)
+                let (status, body) = await assertion(hmac: input)
+                XCTAssertEqual(status, 0, "\(proto)")
+                let authData = try XCTUnwrap(body?[2]?.bytes)
+                XCTAssertEqual(authData[authData.startIndex + 32], 0x85, "flags UP|UV|ED")
+                let extensions = try CBOR.decode(Data(authData.dropFirst(37)))
+                let encrypted = try XCTUnwrap(extensions["hmac-secret"]?.bytes)
+                let output = try proto.decrypt(key: shared, encrypted)
+                XCTAssertEqual(output, salts.map(expected).reduce(Data(), +), "\(proto)")
+                outputs.append(output)
+                // The extension is part of the signed data.
+                let signature = try P256.Signing.ECDSASignature(derRepresentation: try XCTUnwrap(body?[3]?.bytes))
+                XCTAssertTrue(publicKey.isValidSignature(signature, for: authData + clientDataHash))
+            }
+            XCTAssertEqual(outputs[0], outputs[1], "same salt, same secret: stable for LUKS")
+            XCTAssertEqual(outputs[2].count, 64)
+            XCTAssertEqual(keys.decryptCalls, 3)
+        }
+    }
+
+    func testHmacSecretBadInput() async throws {
+        _ = try await registerWithHmacSecret()
+        let (tampered, _) = try await hmacSecretInput(.two, salts: [Data(count: 32)], tamper: true)
+        var (status, _) = await assertion(hmac: tampered)
+        XCTAssertEqual(status, CTAPStatus.pinAuthInvalid.rawValue)
+        let (short, _) = try await hmacSecretInput(.one, salts: [Data(count: 16)])
+        (status, _) = await assertion(hmac: short)
+        XCTAssertEqual(status, CTAPStatus.invalidParameter.rawValue)
+        XCTAssertTrue(ui.signIns.isEmpty, "bad input never prompts")
+        XCTAssertEqual(keys.decryptCalls, 0)
+    }
+
+    func testHmacSecretDecryptDeclined() async throws {
+        _ = try await registerWithHmacSecret()
+        keys.denyDecrypt = true
+        let (input, _) = try await hmacSecretInput(.two, salts: [Data(count: 32)])
+        let (status, _) = await assertion(hmac: input)
+        XCTAssertEqual(status, CTAPStatus.operationDenied.rawValue)
+    }
+
+    func testHmacSecretWithoutRegistrationExtension() async throws {
+        _ = try await register(rk: true)
+        let (input, _) = try await hmacSecretInput(.one, salts: [Data(count: 32)])
+        let (status, body) = await assertion(hmac: input)
+        XCTAssertEqual(status, 0)
+        let authData = try XCTUnwrap(body?[2]?.bytes)
+        XCTAssertEqual(authData.count, 37, "no extension output")
+        XCTAssertEqual(authData[authData.startIndex + 32], 0x05)
+        XCTAssertEqual(keys.decryptCalls, 0)
+    }
+}
+
+private extension Data {
+    func ends(with suffix: Data) -> Bool {
+        count >= suffix.count && self.suffix(suffix.count) == suffix
     }
 }
