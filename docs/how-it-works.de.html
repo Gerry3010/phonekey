@@ -176,7 +176,7 @@ footer { margin-top: 2rem; padding-top: 1rem; border-top: 1px solid var(--line);
     <li class="pill"><span class="dot ok"></span>Verbindung und Pairing</li>
     <li class="pill"><span class="dot ok"></span>Sicherheitsschlüssel, ssh, Browser</li>
     <li class="pill"><span class="dot ok"></span>LUKS</li>
-    <li class="pill"><span class="dot warn"></span>Schlüsselliste, PIN</li>
+    <li class="pill"><span class="dot ok"></span>Schlüsselliste, PIN</li>
     <li class="pill"><span class="dot"></span>Kamera und Mikrofon</li>
   </ul>
 </header>
@@ -194,6 +194,7 @@ footer { margin-top: 2rem; padding-top: 1rem; border-top: 1px solid var(--line);
     <li><a href="#anmelden">Anmelden</a></li>
     <li><a href="#chrome">Chrome-Fehler</a></li>
     <li><a href="#luks">LUKS</a></li>
+    <li><a href="#pin">PIN</a></li>
     <li><a href="#einrichtung">Einrichtung</a></li>
     <li><a href="#schluessel">Wo die Schlüssel liegen</a></li>
     <li><a href="#grenzen">Grenzen</a></li>
@@ -482,7 +483,8 @@ footer { margin-top: 2rem; padding-top: 1rem; border-top: 1px solid var(--line);
       <li><div>Dieses eine Touch ID gibt auch den Schlüssel im Secure Enclave zum Signieren frei. Die Antwort trägt die Flags „anwesend“ und „verifiziert“, und der Zähler des Schlüssels steigt um eins.</div></li>
       <li><div>Der Browser bekommt die Signatur, bei Passkeys auch den Benutzer. Die Website prüft sie mit dem gespeicherten öffentlichen Schlüssel.</div></li>
     </ol>
-    <p>Manche Programme fragen vorher still nach (<code>up=false</code>), ob ein Schlüssel passt. OpenSSH macht das zum Beispiel, bevor es einen residenten Schlüssel anlegt. Ohne Treffer antwortet das iPhone mit <code>NO_CREDENTIALS</code>. Mit Treffer antwortet es <code>UNSUPPORTED_OPTION</code>, weil der Secure Enclave ohne Touch ID nicht signiert.</p>
+    <p>Manche Programme fragen vorher still nach (<code>up=false</code>), ob ein Schlüssel passt. OpenSSH macht das zum Beispiel, bevor es einen residenten Schlüssel anlegt. Ohne Treffer antwortet das iPhone mit <code>NO_CREDENTIALS</code>. Mit Treffer und ohne Token antwortet es <code>UNSUPPORTED_OPTION</code>, weil der Secure Enclave ohne Touch ID nicht signiert.</p>
+    <p>Chrome und Firefox holen sich seit Phase 3b vor jeder Anmeldung ein Token. Die App zeigt dafür eine Karte „Sign in to …“ mit Touch ID, danach meldet sich der Browser mit dem Token an, ohne zweites Touch ID. Firefox fragt mit dem Token vorher still nach, ob der Schlüssel passt. Diese Nachfrage signiert das iPhone mit demselben Touch ID, aber nur in den ersten 30 Sekunden und mit dem Vermerk „nicht anwesend“. Eine solche Signatur nimmt keine Website zum Anmelden an.</p>
     <div class="note warn">
       <p>Abbrechen ist nicht Ablehnen: Der Abbrechen-Knopf im Touch-ID-Dialog heißt „Details“. Er zeigt eine Karte mit Website, Konto und Art der Anfrage, dazu „Touch ID“ (noch einmal versuchen) und „Decline“. Nur „Decline“ lehnt ab, nach 60 Sekunden ohne Antwort bricht die Anfrage ab. Ist die Antwort beim Rechner, zeigt die App kurz „✓ Signed in to … as …“. So siehst du, dass diese Anfrage erledigt ist, bevor die nächste kommt.</p>
     </div>
@@ -558,16 +560,28 @@ sudo systemd-cryptsetup attach daten /dev/sdXN - fido2-device=auto</pre>
     </div>
   </div>
 
+  <div class="sub" id="pin">
+    <h3>PIN</h3>
+    <p>Eine PIN brauchst du nur für Programme, die fest darauf bestehen. <code>ssh-keygen -K</code> und <code>ssh-add -K</code> laden residente Schlüssel nur mit PIN, und die Schlüsselverwaltung in Chrome öffnet sich nur mit PIN. Beim normalen Anmelden bleibt es bei Touch ID.</p>
+    <ol class="steps">
+      <li><div>Du setzt die PIN am Rechner mit <code>fido2-token -S</code> oder in der App unter „Security key PIN“. Das iPhone speichert nur einen Hash der PIN, verschlüsselt mit einem eigenen Secure-Enclave-Schlüssel.</div></li>
+      <li><div>Fragt ein Programm mit der PIN nach einem Token, zeigt die App eine Karte und fragt Touch ID ab. Erst dieses Touch ID entschlüsselt den gespeicherten Hash, danach vergleicht die App ihn mit der eingegebenen PIN. Die PIN allein öffnet also nichts.</div></li>
+      <li><div>Es gibt 8 Versuche. Nach drei falschen PINs in Folge lehnt das iPhone weitere ab, ohne etwas anzuzeigen, bis der Rechner neu verbindet. Sind alle 8 verbraucht, ist die PIN gesperrt.</div></li>
+      <li><div>Eine vergessene oder gesperrte PIN entfernst du in der App mit Touch ID. Die Passkeys bleiben dabei erhalten.</div></li>
+    </ol>
+  </div>
+
   <div class="sub">
     <h3>Wofür es heute geht</h3>
     <div class="tbl">
       <table>
         <thead><tr><th>Einsatz</th><th>Stand</th></tr></thead>
         <tbody>
-          <tr><td>ssh</td><td><code>ssh-keygen -t ecdsa-sk</code>, auch mit <code>-O resident -O verify-required</code>. Fragt OpenSSH nach einer PIN, drückst du Enter, die Verifikation macht Touch ID. Auf echtem Linux getestet.</td></tr>
-          <tr><td>Websites</td><td>Chrome und Firefox, als Sicherheitsschlüssel oder Passkey, mit und ohne Benutzernamen. Auf echtem Linux getestet.</td></tr>
+          <tr><td>ssh</td><td><code>ssh-keygen -t ecdsa-sk</code>, auch mit <code>-O resident -O verify-required</code>. Ohne gesetzte PIN fragt OpenSSH trotzdem nach einer, dann drückst du Enter, die Verifikation macht Touch ID. <code>ssh-keygen -K</code> lädt residente Schlüssel mit PIN. Auf echtem Linux getestet.</td></tr>
+          <tr><td>Websites</td><td>Chrome und Firefox, als Sicherheitsschlüssel oder Passkey, mit und ohne Benutzernamen, über ein Token mit einem Touch ID. Auf echtem Linux getestet.</td></tr>
+          <tr><td>Chrome-Verwaltung</td><td><code>chrome://settings/securityKeys</code> listet die Passkeys auf dem iPhone, nach der PIN und einem Touch ID.</td></tr>
           <tr><td>LUKS</td><td><code>systemd-cryptenroll</code>, <code>cryptsetup open --token-only</code> und <code>systemd-cryptsetup attach</code> mit einer LUKS2-Testdatei auf echtem Linux getestet, je ein Touch ID pro Öffnen.</td></tr>
-          <tr><td>libfido2</td><td><code>fido2-token -L</code> und <code>-I</code> sehen den Schlüssel korrekt.</td></tr>
+          <tr><td>libfido2</td><td><code>fido2-token</code> zeigt den Schlüssel (<code>-I</code>), listet und löscht Passkeys (<code>-L</code>, <code>-D</code>) und setzt oder ändert die PIN (<code>-S</code>, <code>-C</code>).</td></tr>
           <tr><td>pam-u2f</td><td>Sollte gehen (sudo oder Login per Touch ID), noch nicht getestet.</td></tr>
           <tr><td>Selbsttest</td><td><code>phonekey fido selftest</code> legt einen Test-Passkey für <code>phonekey.test</code> an, meldet sich an und prüft alles selbst. Kann das iPhone <code>hmac-secret</code>, prüft er es mit beiden PIN/UV-Protokollen: Derselbe Salt muss dasselbe Geheimnis ergeben.</td></tr>
         </tbody>
@@ -611,6 +625,7 @@ phonekey fido selftest
         <tr><td>iPhone</td><td>FIDO-Schlüssel (P-256)</td><td>Secure Enclave, nur nach Touch ID nutzbar, verlässt den Chip nie</td></tr>
         <tr><td>iPhone</td><td>Liste der Credentials (Website, Konto, ID)</td><td>Schlüsselbund, „nur dieses Gerät“: kein Backup, keine iCloud</td></tr>
         <tr><td>iPhone</td><td><code>hmac-secret</code> je Credential (32 Byte, für LUKS)</td><td>bei der Liste, verschlüsselt mit dem Secure-Enclave-Schlüssel des Credentials, nur nach Touch ID lesbar</td></tr>
+        <tr><td>iPhone</td><td>PIN, falls gesetzt, und die übrigen Versuche</td><td>nur ein Hash, verschlüsselt mit einem eigenen Secure-Enclave-Schlüssel, nur nach Touch ID lesbar</td></tr>
         <tr><td>iPhone</td><td>Sitzungsschlüssel (X25519), gepairte Rechner</td><td>Schlüsselbund, „nur dieses Gerät“</td></tr>
         <tr><td>Linux</td><td>Rechner-Schlüssel (X25519)</td><td><code>~/.config/phonekey/host.key</code>, Rechte 0600</td></tr>
         <tr><td>Linux</td><td>gepairte iPhones (öffentliche Schlüssel)</td><td><code>~/.config/phonekey/phones.json</code></td></tr>
@@ -639,11 +654,11 @@ phonekey fido selftest
     <li><span class="mark ok"></span><div class="body"><span class="state">Phase 0 · fertig</span><h3>Projektstart</h3><p>Repo, Xcode-Projekt, Dokumentation.</p></div></li>
     <li><span class="mark ok"></span><div class="body"><span class="state">Phase 1 · fertig</span><h3>Verbindung und Desk-Modus</h3><p>usbmuxd-Tunnel, verschlüsselte Sitzung, Pairing per QR-Code, Status, Fotos, Desk-Modus. Auf dem iPhone 7 mit iOS 15.8.2 geprüft.</p></div></li>
     <li><span class="mark ok"></span><div class="body"><span class="state">Phase 2 · fertig</span><h3>Sicherheitsschlüssel und Passkeys</h3><p>Auf echtem Linux mit Selbsttest, libfido2, OpenSSH, Chrome und Firefox geprüft. Eine Anmeldung braucht ein Touch ID, Abbrechen lehnt nicht ab, und in der App verwaltest du die Schlüssel.</p></div></li>
-    <li><span class="mark warn"></span><div class="body"><span class="state">Phase 3 · 3a fertig, 3b in Arbeit</span><h3>Mehr FIDO</h3>
+    <li><span class="mark ok"></span><div class="body"><span class="state">Phase 3 · fertig</span><h3>Mehr FIDO</h3>
       <ul class="plain">
-        <li>3a, hmac-secret (fertig): LUKS-Laufwerke mit <code>systemd-cryptenroll</code> entsperren, solange du angemeldet bist (Datenpartitionen, externe Platten, nicht das Root-Laufwerk beim Booten). Am 15. November auf echtem Linux getestet.</li>
-        <li>3b, Token per Touch ID und Schlüsselliste: Chrome holt sich vor jeder Anmeldung ein Token per Touch ID, und <code>fido2-token</code> listet und löscht Passkeys. Ein Touch ID gibt genau eine Anmeldung frei.</li>
-        <li>3c, PIN mit Touch ID: OpenSSH (<code>ssh-keygen -K</code>, <code>ssh-add -K</code>) und die Schlüsselverwaltung in Chrome verlangen fest eine PIN. Die PIN liegt nur als Hash auf dem iPhone, verschlüsselt mit einem eigenen Secure-Enclave-Schlüssel. Jede Nutzung fragt zusätzlich Touch ID ab, und eine vergessene PIN setzt du in der App mit Touch ID zurück, die Schlüssel bleiben dabei erhalten. Beim normalen Anmelden bleibt es bei Touch ID.</li>
+        <li>3a, hmac-secret: LUKS-Laufwerke mit <code>systemd-cryptenroll</code> entsperren, solange du angemeldet bist (Datenpartitionen, externe Platten, nicht das Root-Laufwerk beim Booten).</li>
+        <li>3b, Token per Touch ID und Schlüsselliste: Chrome und Firefox holen sich vor jeder Anmeldung ein Token per Touch ID, und <code>fido2-token</code> listet und löscht Passkeys. Ein Touch ID gibt genau eine Anmeldung frei.</li>
+        <li>3c, PIN mit Touch ID: OpenSSH (<code>ssh-keygen -K</code>, <code>ssh-add -K</code>) und die Schlüsselverwaltung in Chrome verlangen fest eine PIN. Die PIN liegt nur als Hash auf dem iPhone, verschlüsselt mit einem eigenen Secure-Enclave-Schlüssel. Jede Nutzung fragt zusätzlich Touch ID ab, und eine vergessene PIN entfernst du in der App, die Schlüssel bleiben dabei erhalten. Alle drei Schritte sind am 15. November mit dem iPhone 7 auf echtem Linux getestet.</li>
         <li>U2F (CTAP1): nur bei Bedarf. Aktuelle Browser, OpenSSH und pam-u2f sprechen CTAP2.</li>
       </ul></div></li>
     <li><span class="mark"></span><div class="body"><span class="state">Phase 4 · geplant</span><h3>Kamera und Mikrofon</h3><p>Die iPhone-Kamera als Webcam über <code>v4l2loopback</code>, das Mikrofon als PipeWire-Quelle. Zuerst kommt der Protokollteil für Streams.</p></div></li>

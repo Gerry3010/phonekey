@@ -92,10 +92,22 @@ own rule (`60-fido-id.rules`), as for any FIDO key. Check with `fido2-token -L`
 Then:
 
 - **Websites:** choose "security key" or "passkey on another device / USB key"
-  in Chrome or Firefox.
+  in Chrome or Firefox. Both first ask the phone for a token ("Sign in to …",
+  Touch ID) and then sign in with it, without a second Touch ID.
 - **SSH:** `ssh-keygen -t ecdsa-sk` (optionally `-O resident -O verify-required`).
-  For `verify-required` keys OpenSSH asks for a PIN: just press Enter, Touch ID
-  is the verification.
+  For `verify-required` keys without a PIN set, OpenSSH still asks for one: just
+  press Enter, Touch ID is the verification. `ssh-keygen -K` and `ssh-add -K`
+  load resident keys from the phone and need a PIN (see below).
+- **Managing passkeys:** `fido2-token -L -r` lists the sites, `-L -k <site>`
+  their passkeys, and `-D -i <id>` deletes one after a tap on the phone. Each
+  call asks for Touch ID. Chrome's list under `chrome://settings/securityKeys`
+  needs a PIN.
+- **PIN:** only for programs that insist on one (`ssh-keygen -K`, `ssh-add -K`,
+  Chrome's key management). Set it with `fido2-token -S` or in PhoneKey →
+  Security key PIN, change it with `fido2-token -C`. Every use still needs
+  Touch ID on the phone. There are 8 tries, and three wrong PINs in a row block
+  PIN use until the phone reconnects. A forgotten PIN is removed in the app;
+  the passkeys stay.
 - **Diagnostics without Linux:** `phonekey fido info` and `phonekey fido selftest`
   work on macOS too and check the phone's authenticator from the host side. If
   the phone offers `hmac-secret`, the self-test also checks it with both PIN/UV
@@ -110,9 +122,8 @@ Then:
   systemctl --user start phonekey-fido   # afterwards
   ```
 
-Not supported yet: listing resident keys (`ssh-keygen -K`, browser key
-management), U2F-only sites, PINs. Keys are bound to this iPhone and not backed
-up: keep a second way to sign in everywhere.
+Not supported: sites that only speak U2F (CTAP1). Keys are bound to this iPhone
+and not backed up: keep a second way to sign in everywhere.
 
 ### Disk encryption (LUKS)
 
