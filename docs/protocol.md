@@ -168,7 +168,7 @@ Host:
  "thermal":"nominal",
  "desk_mode":true,
  "guided_access":false,
- "camera":{"enabled":false,"available":true}}
+ "camera":{"enabled":false,"available":true,"stream_enabled":false,"streaming":false}}
 ```
 
 - `battery.level`: 0…1, or `null` if unknown. `battery.state`: `unknown`,
@@ -176,7 +176,9 @@ Host:
 - `thermal`: `nominal`, `fair`, `serious`, `critical`.
 - `camera.enabled`: the user allows hosts to take photos (a switch in the app,
   off by default). `camera.available`: the device has a usable camera and the
-  app has camera permission.
+  app has camera permission. `camera.stream_enabled`: the user allows the
+  webcam (its own switch, off by default; Phase 4). `camera.streaming`: a
+  webcam stream is running.
 
 ### photo
 
@@ -199,6 +201,101 @@ stream id, then `photo.end`:
 The host MUST check `size` and `sha256`. While a photo is taken the phone shows
 it on screen and iOS plays the shutter sound.
 
+### camera (Phase 4)
+
+A webcam stream. A phone that offers it lists the feature `camera` in `hello`.
+
+```json
+{"t":"camera.start","id":5,"camera":"front","quality":"720p","fps":30}
+```
+
+- `camera`: `front` (default) or `back`.
+- `quality`: `720p` (1280×720, default) or `1080p` (1920×1080).
+- `fps`: 15 to 30, default 30.
+
+The phone answers with what it actually delivers. The host uses these values,
+not the ones it asked for:
+
+```json
+{"t":"camera.started","id":5,"stream":2,"codec":"h264","width":1280,"height":720,"fps":30,"camera":"front"}
+```
+
+`width` and `height` can be smaller than requested when the camera cannot
+deliver more in the current orientation (see Picture).
+
+**Video.** The chunks of `stream` carry a sequence of frames. Frames do not line
+up with chunks: a frame can span several chunks, and a chunk can end inside a
+frame. Each frame is:
+
+| Size | Value |
+|---|---|
+| 1 | flags: bit 0 set for a keyframe, the other bits 0 |
+| 8 | capture time in microseconds, unsigned big-endian, monotonic on the phone |
+| 4 | length `N`, unsigned big-endian |
+| `N` | one H.264 access unit in Annex B format (with start codes) |
+
+- H.264 Main or High profile without B-frames, so frames arrive in display order.
+- A keyframe is an IDR frame with SPS and PPS in front of it. The first frame
+  is one, and then at least one every 2 s.
+- About 4 Mbit/s at 720p and 8 Mbit/s at 1080p.
+
+**Picture.** Always upright and landscape (16:9), however the phone stands:
+portrait with the cable at the bottom or at the top, or landscape. The phone
+rotates and crops. The front camera is not mirrored; video apps mirror their
+own preview.
+
+**Falling behind.** The phone never holds more than 0.5 s of video. When sending
+falls behind, it drops whole frames up to the next keyframe and has the encoder
+make one. The host can ask for a keyframe too, for example after restarting its
+decoder:
+
+```json
+{"t":"camera.keyframe","id":6,"stream":2}
+```
+
+**Heat.** At `thermal` `serious` the phone lowers the frame rate to 15 and says
+so. Width and height never change while a stream runs.
+
+```json
+{"t":"camera.changed","stream":2,"fps":15}
+```
+
+**Stopping.**
+
+```json
+{"t":"camera.stop","id":7,"stream":2}
+{"t":"camera.stopped","id":7,"stream":2,"reason":"requested"}
+```
+
+The phone also stops on its own and then sends `camera.stopped` without `id`:
+
+| `reason` | Meaning |
+|---|---|
+| `requested` | the host asked |
+| `stopped_on_phone` | the user tapped Stop on the phone |
+| `switched_off` | the user turned the webcam off in the app |
+| `interrupted` | iOS took the camera away, for example for a phone call |
+| `thermal` | `thermal` reached `critical` |
+| `failed` | capturing or encoding failed |
+
+When the session ends, the stream ends with it.
+
+**Rules.**
+- One stream at a time. Another `camera.start`, or `photo.capture` while a
+  stream runs, gets `busy`.
+- The webcam has its own switch in the app, off by default and separate from
+  photos (`camera.stream_enabled` in `status`). While it is off, `camera.start`
+  gets `camera_stream_disabled`.
+- While a stream runs, the phone shows which computer receives it, with a Stop
+  button, and iOS shows its green camera dot.
+
+**Host side.** `phonekey camera run` keeps a v4l2loopback device named
+"PhoneKey" open as its producer. While no application reads it, the host shows a
+still placeholder picture and the phone does not stream. When an application
+opens the webcam (v4l2loopback's client usage event), the host sends
+`camera.start`, decodes the frames with ffmpeg and writes them to the device.
+When the last application closes it, the host sends `camera.stop`.
+
 ### error
 
 ```json
@@ -215,6 +312,8 @@ it on screen and iOS plays the shutter sound.
 | `unknown_type` | the request type is unknown |
 | `camera_disabled` | photos are switched off in the app |
 | `camera_unavailable` | no camera, or no camera permission |
+| `camera_stream_disabled` | the webcam is switched off in the app |
+| `unsupported` | a requested value is not supported (`camera`, `quality`, `fps`) |
 | `busy` | the phone is already handling a conflicting request |
 | `capture_failed` | taking the photo failed |
 | `internal` | anything else |
@@ -690,3 +789,4 @@ LUKS passphrase: the secret exists only on the phone. Once a PIN exists (3c),
 | 1 | first version: session, pairing, hello, ping, status, photo |
 | 1 + `fido` | `ctap.request`, `ctap.response`, `ctap.cancel` (Phase 2) |
 | 1 + `fido`, Phase 3 | Authenticator behaviour of steps 3a–3c in §10 (`hmac-secret`, `pinUvAuthToken`, credential management, PIN). No message changes. |
+| 1 + `camera` | `camera.start`, `camera.started`, `camera.keyframe`, `camera.changed`, `camera.stop`, `camera.stopped`, new `status` fields and error codes (Phase 4) |

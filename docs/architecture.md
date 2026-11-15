@@ -69,7 +69,7 @@ The exact format is in [protocol.md](protocol.md).
 2. **FIDO2 security key and passkeys.** The phone is a full CTAP2 authenticator: discoverable credentials, user verification via Touch ID (any enrolled finger), ES256 keys in the Secure Enclave, attestation "none", `credProtect`. The host tunnels CTAPHID through a virtual `/dev/uhid` device that exists only while the phone is connected. *(done; verified with libfido2 and OpenSSH in a VM and on the iPhone 7, Chrome and Firefox on real Linux)*
 3. **More FIDO**, in three steps (protocol §10): 3a `hmac-secret` (LUKS via `systemd-cryptenroll`), 3b `pinUvAuthToken` via Touch ID and credential management (`FIDO_2_1`), 3c a PIN that only works together with Touch ID, because `ssh-keygen -K` and Chrome's key management insist on one. *(done; verified on the iPhone 7 with real Linux: LUKS, `fido2-token`, `ssh-keygen -K`, Chrome and Firefox)*
    - U2F/CTAP1: only if a service needs it.
-4. **Streaming and voice.** Webcam and microphone streams.
+4. **Webcam and microphone**, in two steps: 4a the camera as a webcam (H.264 from the phone, `v4l2loopback` on Linux, protocol §5 "camera"; front or back camera, 720p by default and 1080p on request), 4b the microphone as a PipeWire source.
 5. **macOS host (optional).** Needs a DriverKit virtual HID device and an entitlement from Apple.
 
 An approval button for coding agents was considered and dropped: Touch ID is only used for the security key.
