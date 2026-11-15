@@ -134,8 +134,11 @@ final class KeychainCredentialStore: ObservableObject, CredentialStore, @uncheck
         locked { items.first { $0.id == id } }
     }
 
-    func save(_ credential: StoredCredential) throws {
-        try mutate { $0.append(credential) }
+    func save(_ credential: StoredCredential, replacing: [Data]) throws {
+        try mutate { items in
+            items.removeAll { replacing.contains($0.id) }
+            items.append(credential)
+        }
     }
 
     func incrementCounter(id: Data) throws -> UInt32 {

@@ -9,7 +9,10 @@ final class MemoryStore: CredentialStore {
 
     func credentials(rpId: String) -> [StoredCredential] { items.filter { $0.rpId == rpId } }
     func credential(id: Data) -> StoredCredential? { items.first { $0.id == id } }
-    func save(_ credential: StoredCredential) throws { items.append(credential) }
+    func save(_ credential: StoredCredential, replacing: [Data]) throws {
+        items.removeAll { replacing.contains($0.id) }
+        items.append(credential)
+    }
     func incrementCounter(id: Data) throws -> UInt32 {
         guard let i = items.firstIndex(where: { $0.id == id }) else { throw CTAPStatus.noCredentials }
         items[i].signCount += 1
@@ -145,6 +148,26 @@ final class AuthenticatorTests: XCTestCase {
         XCTAssertEqual(credential.signCount, 3)
         XCTAssertNil(credential.lastUsed)
         XCTAssertNil(credential.suggested)
+    }
+
+    /// Registering a passkey again for the same account replaces the old one
+    /// (CTAP 2.1); another account and non-discoverable keys stay.
+    func testNewPasskeyReplacesSameAccount() async throws {
+        let (first, _) = try await register(rk: true)
+        store.items[0].suggested = true
+        let (other, _) = try await register(rk: true, user: "other")
+        let (nonResident, _) = try await register(rk: false)
+        let (second, _) = try await register(rk: true)
+
+        let ids = store.credentials(rpId: "github.com").map(\.id)
+        XCTAssertFalse(ids.contains(first), "the old passkey is replaced")
+        XCTAssertTrue(ids.contains(second))
+        XCTAssertTrue(ids.contains(other))
+        XCTAssertTrue(ids.contains(nonResident))
+        XCTAssertEqual(store.credentials(rpId: "github.com").filter { $0.discoverable && $0.userName == "gerry" }.count, 1)
+        XCTAssertNil(keys.keys[first], "its key is deleted")
+        XCTAssertNotNil(keys.keys[second])
+        XCTAssertEqual(store.credential(id: second)?.suggested, true, "keeps the suggestion")
     }
 
     /// A full batch, as Chrome sends it after reading getInfo 7 and 8, fits the

@@ -354,7 +354,11 @@ registered.
   authenticator data extensions (flag `ED`, `0xC5` in total). Every use needs
   Touch ID, so all levels are always satisfied. OpenSSH requires this extension
   for resident and `verify-required` keys. Other extensions are ignored.
-- Every credential is stored on the phone, discoverable or not.
+- Every credential is stored on the phone, discoverable or not. A new
+  discoverable credential replaces the discoverable credentials of the same
+  account (same `rp.id` and `user.id`), as CTAP 2.1 requires: metadata in one
+  step, the old Secure Enclave keys right after. Non-discoverable credentials
+  are never replaced; the site still holds their IDs.
 
 ### authenticatorGetAssertion (`0x02`)
 
