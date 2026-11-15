@@ -11,6 +11,9 @@ Das Zielgerät ist ein **iPhone 7 mit höchstens iOS 15.8**, das Deployment Targ
 
 - Nur iOS-15-APIs: kein `NavigationStack`, keine Observation (`@Observable`), keine Passkey- oder
   Credential-Provider-APIs, kein Swift Charts. Previews als `PreviewProvider`.
+- SwiftUI-Alerts unter iOS 15: Beim Tippen auf einen Knopf wird das `isPresented`-Binding
+  zurückgesetzt, bevor die Knopf-Aktion läuft. Daten für die Aktion über `presenting:` übergeben,
+  nie aus dem State lesen, den der Binding-Setter leert (im iOS-17-Simulator fällt das nicht auf).
 - **Es gibt keinen iOS-15-Simulator mehr** (die Runtime läuft auf macOS 26 nicht). Simulator-Tests
   laufen auf iOS 17+. Ob etwas auf iOS 15 funktioniert, zeigt nur das echte Gerät.
 - Die App läuft **nur im Vordergrund** (Desk-Station mit Guided Access). Im Hintergrund stoppt die
