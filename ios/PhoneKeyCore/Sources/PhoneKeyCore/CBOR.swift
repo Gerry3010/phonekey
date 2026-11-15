@@ -149,6 +149,24 @@ public indirect enum CBOR: Equatable {
         return item
     }
 
+    /// The encoding of the value under `key` in the map `data`, byte for byte
+    /// as it arrived: CTAP MACs some parameters over their encoding, which a
+    /// decode and re-encode need not reproduce. nil when the key is absent.
+    public static func rawValue(forKey key: CBOR, inMap data: Data) throws -> Data? {
+        var reader = Reader(bytes: [UInt8](data))
+        let initial = try reader.take(1).first!
+        guard initial >> 5 == 5 else { throw DecodeError.unsupported(initial) }
+        var found: Data?
+        for _ in 0..<(try reader.length(initial & 0x1F)) {
+            let entryKey = try reader.item(depth: 1)
+            let start = reader.offset
+            _ = try reader.item(depth: 1)
+            if found == nil, entryKey == key { found = Data(reader.bytes[start..<reader.offset]) }
+        }
+        guard reader.offset == reader.bytes.count else { throw DecodeError.trailingBytes }
+        return found
+    }
+
     private struct Reader {
         let bytes: [UInt8]
         var offset = 0

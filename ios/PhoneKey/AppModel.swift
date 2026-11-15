@@ -195,7 +195,7 @@ final class AppModel: ObservableObject {
 
     /// A connection ended: whatever it asked for is no longer wanted.
     private func sessionEnded(_ session: ObjectIdentifier) {
-        ctapSessions[session] = nil
+        ctapSessions.removeValue(forKey: session)?.end()
         if let job = ctapJob, job.session == session {
             job.task.cancel()
         }

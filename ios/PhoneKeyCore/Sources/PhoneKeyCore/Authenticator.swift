@@ -104,13 +104,13 @@ public protocol CredentialKeys: AnyObject {
     /// CTAPStatus.operationDenied when the user declines. `authorization` is
     /// the Touch ID of a pinUvAuthToken (from `AuthenticatorUI.authorizeToken`):
     /// with it, no new prompt; it serves this one operation and is used up.
-    func sign(id: Data, data: Data, reason: String, authorization: AnyObject?) async throws -> Data
+    func sign(id: Data, data: Data, reason: String, authorization: TouchIDAuthorization?) async throws -> Data
     /// Encrypts to a public key (x963) with ECIES. Needs no Touch ID.
     func encrypt(toPublicKey x963: Data, plaintext: Data) throws -> Data
     /// Decrypts with the key. Like `sign`, it needs Touch ID; within one
     /// sign-in the same Touch ID covers both (docs/protocol.md §10). Called
     /// before `sign` in the same request, so it leaves `authorization` alive.
-    func decrypt(id: Data, ciphertext: Data, reason: String, authorization: AnyObject?) async throws -> Data
+    func decrypt(id: Data, ciphertext: Data, reason: String, authorization: TouchIDAuthorization?) async throws -> Data
     /// The public key (x963) of a stored key, without Touch ID.
     func publicKey(id: Data) throws -> Data
     func deleteKey(id: Data)
@@ -157,7 +157,7 @@ public struct TokenPrompt: Equatable {
 
 public enum TokenDecision {
     /// `authorization` unlocks one key operation when the token signs.
-    case approved(authorization: AnyObject?)
+    case approved(authorization: TouchIDAuthorization?)
     case denied
     case timedOut
     /// iOS has locked Touch ID after failed attempts.
@@ -243,7 +243,7 @@ public final class Authenticator {
             case .clientPIN:
                 response = try await clientPIN(try Self.parameters(params), session: session)
             case .credentialManagement:
-                response = try await credentialManagement(try Self.parameters(params), session: session)
+                response = try await credentialManagement(try Self.parameters(params), raw: params, session: session)
             case .selection:
                 try check(await ui.confirmSelection())
                 response = nil
@@ -521,11 +521,20 @@ public final class Authenticator {
 
         switch await ui.authorizeToken(prompt) {
         case let .approved(authorization):
-            try Task.checkCancellation()
-            let value = random(32)
-            session.setToken(CTAPSession.Token(value: value, permissions: prompt.permissions, rpId: rpId,
-                                               issued: now(), authorization: prompt.signs ? authorization : nil))
-            return .map([.int(2): .bytes(try proto.encrypt(key: shared, value))])
+            // Only a token that signs keeps the Touch ID, and only once issued.
+            let kept = prompt.signs ? authorization : nil
+            if kept == nil { authorization?.invalidate() }
+            do {
+                try Task.checkCancellation()
+                let value = random(32)
+                let answer = try proto.encrypt(key: shared, value)
+                session.setToken(CTAPSession.Token(value: value, proto: proto, permissions: prompt.permissions,
+                                                   rpId: rpId, issued: now(), authorization: kept))
+                return .map([.int(2): .bytes(answer)])
+            } catch {
+                kept?.invalidate()
+                throw error
+            }
         case .denied:
             throw CTAPStatus.operationDenied
         case .timedOut:
@@ -539,13 +548,15 @@ public final class Authenticator {
 
     /// Lists and deletes discoverable credentials with a token that has the
     /// `cm` permission (§10). Only `deleteCredential` asks on the phone.
-    private func credentialManagement(_ p: CBOR, session: CTAPSession) async throws -> CBOR? {
+    private func credentialManagement(_ p: CBOR, raw: Data, session: CTAPSession) async throws -> CBOR? {
         guard let subCommand = p[1]?.int else { throw CTAPStatus.missingParameter }
         let params = p[2]
+        // The MAC covers subCommandParams as the host encoded them.
+        let rawParams = try? CBOR.rawValue(forKey: .int(2), inMap: raw)
         func authorize(_ scope: CTAPSession.TokenScope) throws {
             guard let param = p[4]?.bytes else { throw CTAPStatus.puatRequired }
             var message = Data([UInt8(truncatingIfNeeded: subCommand)])
-            if let params { message += params.encoded }
+            if let rawParams { message += rawParams }
             _ = try session.useToken(param: param, protocolNumber: p[3]?.int, message: message,
                                      permission: TokenPrompt.credentialManagement, scope: scope, now: now())
         }

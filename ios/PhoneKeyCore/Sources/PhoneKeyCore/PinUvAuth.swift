@@ -113,8 +113,16 @@ public enum PinUvAuthProtocol: Int, CaseIterable, Sendable {
     }
 }
 
+/// The Touch ID a pinUvAuthToken carries; in the app an `LAContext`. It is
+/// invalidated as soon as the token can no longer use it, not only when it
+/// happens to be released (docs/protocol.md §10, "Where the token's Touch ID
+/// goes").
+public protocol TouchIDAuthorization: AnyObject {
+    func invalidate()
+}
+
 /// CTAP state that belongs to one connection with a host: CTAP calls it a
-/// power cycle (docs/protocol.md §10, "Session state"). Dropped with the
+/// power cycle (docs/protocol.md §10, "Session state"). Ended with the
 /// connection; another host's connection has its own.
 public final class CTAPSession: @unchecked Sendable {
     private let lock = NSLock()
@@ -124,6 +132,22 @@ public final class CTAPSession: @unchecked Sendable {
     private var credentials: [StoredCredential]?
 
     public init() {}
+
+    deinit {
+        token?.authorization?.invalidate()
+    }
+
+    /// The connection is gone: the token and its Touch ID, the key agreement
+    /// key and any enumeration go with it.
+    public func end() {
+        lock.lock()
+        defer { lock.unlock() }
+        token?.authorization?.invalidate()
+        token = nil
+        keyAgreement = nil
+        sites = nil
+        credentials = nil
+    }
 
     /// The key agreement key, created when first needed, never stored.
     func keyAgreementKey() -> P256.KeyAgreement.PrivateKey {
@@ -140,16 +164,21 @@ public final class CTAPSession: @unchecked Sendable {
     /// The session's pinUvAuthToken (§10, "getPinUvAuthTokenUsingUvWithPermissions").
     struct Token {
         let value: Data
+        /// The PIN/UV auth protocol it was issued over; CTAP keeps a token per
+        /// protocol, so it verifies only with this one.
+        let proto: PinUvAuthProtocol
         var permissions: UInt8
         /// Its permissions RP ID; a token without one is bound at first use.
         var rpId: String?
         let issued: Date
         var used = false
         /// The token's Touch ID when it signs: one key operation.
-        var authorization: AnyObject?
+        var authorization: TouchIDAuthorization?
 
-        init(value: Data, permissions: UInt8, rpId: String?, issued: Date, authorization: AnyObject?) {
+        init(value: Data, proto: PinUvAuthProtocol, permissions: UInt8, rpId: String?, issued: Date,
+             authorization: TouchIDAuthorization?) {
             self.value = value
+            self.proto = proto
             self.permissions = permissions
             self.rpId = rpId
             self.issued = issued
@@ -171,21 +200,23 @@ public final class CTAPSession: @unchecked Sendable {
     }
 
     struct TokenUse {
-        let authorization: AnyObject?
+        let authorization: TouchIDAuthorization?
     }
 
     static let initialUsageLimit: TimeInterval = 30
     static let maxUsagePeriod: TimeInterval = 600
 
-    /// A new token replaces any earlier one of this session.
+    /// A new token replaces any earlier one of this session, for every
+    /// protocol; the earlier one's Touch ID is invalidated.
     func setToken(_ new: Token) {
         lock.lock()
         defer { lock.unlock() }
+        if let old = token?.authorization, old !== new.authorization { old.invalidate() }
         token = new
     }
 
     /// Checks `param` = authenticate(token, message) and the token's
-    /// permission and scope. Any failure: PIN_AUTH_INVALID.
+    /// protocol, permission and scope. Any failure: PIN_AUTH_INVALID.
     func useToken(param: Data, protocolNumber: Int?, message: Data, permission: UInt8,
                   scope: TokenScope, now: Date) throws -> TokenUse {
         guard let number = protocolNumber else { throw CTAPStatus.missingParameter }
@@ -195,10 +226,12 @@ public final class CTAPSession: @unchecked Sendable {
         guard var current = token else { throw CTAPStatus.pinAuthInvalid }
         let age = now.timeIntervalSince(current.issued)
         guard age >= 0, age < Self.maxUsagePeriod, current.used || age < Self.initialUsageLimit else {
+            current.authorization?.invalidate()
             token = nil
             throw CTAPStatus.pinAuthInvalid
         }
-        guard proto.verify(key: current.value, message: message, signature: param),
+        guard proto == current.proto,
+              proto.verify(key: current.value, message: message, signature: param),
               current.permissions & permission != 0
         else { throw CTAPStatus.pinAuthInvalid }
         let signs = permission & (TokenPrompt.makeCredential | TokenPrompt.getAssertion) != 0
@@ -225,11 +258,12 @@ public final class CTAPSession: @unchecked Sendable {
 
     /// After a makeCredential or getAssertion with the token, whatever its
     /// outcome: it keeps no permission for another one (CTAP 2.1), and its
-    /// Touch ID is dropped (an `LAContext` is invalidated when released).
+    /// Touch ID is invalidated.
     func consumeSigningPermissions() {
         lock.lock()
         defer { lock.unlock() }
         token?.permissions &= ~(TokenPrompt.makeCredential | TokenPrompt.getAssertion)
+        token?.authorization?.invalidate()
         token?.authorization = nil
     }
 
