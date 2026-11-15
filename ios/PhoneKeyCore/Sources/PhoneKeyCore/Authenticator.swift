@@ -71,7 +71,9 @@ public struct StoredCredential: Codable, Equatable, Identifiable {
 public protocol CredentialStore: AnyObject {
     func credentials(rpId: String) -> [StoredCredential]
     func credential(id: Data) -> StoredCredential?
-    func save(_ credential: StoredCredential) throws
+    /// Adds `credential` and removes the credentials in `replacing`, in one
+    /// step, so there is never a moment with none or both of them.
+    func save(_ credential: StoredCredential, replacing: [Data]) throws
     /// Increments and returns the new counter.
     func incrementCounter(id: Data) throws -> UInt32
 }
@@ -258,10 +260,21 @@ public final class Authenticator {
             throw CTAPStatus.keyStoreFull
         }
         guard publicKey.count == 65, publicKey.first == 0x04 else { throw CTAPStatus.other }
+        // A new passkey for an account that already has one replaces it
+        // (CTAP 2.1 §6.1.2: same RP ID and user ID). Non-discoverable
+        // credentials are never replaced: the site keeps their IDs.
+        let replaced = passkey
+            ? store.credentials(rpId: rpId).filter { $0.discoverable && $0.userId == userId }
+            : []
         try store.save(StoredCredential(
             id: credentialId, rpId: rpId, rpName: rp["name"]?.text, userId: userId,
             userName: user["name"]?.text, userDisplayName: user["displayName"]?.text,
-            discoverable: passkey, created: Date(), signCount: 0, credProtect: credProtect))
+            discoverable: passkey, created: Date(), signCount: 0, credProtect: credProtect,
+            suggested: replaced.contains { $0.suggested == true } ? true : nil),
+            replacing: replaced.map(\.id))
+        // Only after the metadata is gone: a failure leaves an unused key, never
+        // an entry without its key.
+        for old in replaced { keys.deleteKey(id: old.id) }
 
         var authData = Self.rpIdHash(rpId)
         authData.append(Flags.up | Flags.uv | Flags.at | (credProtect != nil ? Flags.ed : 0))
