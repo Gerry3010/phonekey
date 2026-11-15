@@ -717,6 +717,68 @@ final class AuthenticatorTests: XCTestCase {
         XCTAssertEqual(status, 0)
     }
 
+    /// Firefox checks with the token and up = false before it signs in.
+    func testSilentAssertionWithToken() async throws {
+        let (credentialId, publicKey) = try await register(rk: true)
+        let touchID = ScriptedUI.Authorization()
+        ui.tokenDecision = .approved(authorization: touchID)
+        let (_, token) = try await getToken(permissions: 0x02)
+        let descriptor = CBOR.map([.text("id"): .bytes(credentialId), .text("type"): .text("public-key")])
+        let silent = CBOR.map([.int(1): .text("github.com"), .int(2): .bytes(clientDataHash),
+                               .int(3): .array([descriptor]), .int(5): .map([.text("up"): .bool(false)])])
+        var (status, body) = await call(0x02, withToken(silent, key: 6, token: try XCTUnwrap(token)))
+        XCTAssertEqual(status, 0)
+        let first = try XCTUnwrap(body?[2]?.bytes)
+        XCTAssertEqual(first[first.startIndex + 32], 0x04, "UV only, UP = 0")
+        let signature = try P256.Signing.ECDSASignature(derRepresentation: try XCTUnwrap(body?[3]?.bytes))
+        XCTAssertTrue(publicKey.isValidSignature(signature, for: first + clientDataHash))
+        XCTAssertTrue(ui.signIns.isEmpty, "no card")
+        XCTAssertTrue(keys.lastAuthorization === touchID, "the token's Touch ID signs")
+        XCTAssertFalse(touchID.invalidated, "kept for the sign-in that follows")
+
+        // The sign-in with user presence follows with the same token; then it is used up.
+        let ga = CBOR.map([.int(1): .text("github.com"), .int(2): .bytes(clientDataHash),
+                           .int(3): .array([descriptor])])
+        (status, body) = await call(0x02, withToken(ga, key: 6, token: try XCTUnwrap(token)))
+        XCTAssertEqual(status, 0)
+        let second = try XCTUnwrap(body?[2]?.bytes)
+        XCTAssertEqual(second[second.startIndex + 32], 0x05)
+        XCTAssertEqual(Array(second[(second.startIndex + 33)..<(second.startIndex + 37)]), [0, 0, 0, 2],
+                       "the counter went up for both")
+        XCTAssertEqual(ui.signIns.last?.verified, true)
+        XCTAssertTrue(touchID.invalidated)
+        (status, _) = await call(0x02, withToken(silent, key: 6, token: try XCTUnwrap(token)))
+        XCTAssertEqual(status, CTAPStatus.pinAuthInvalid.rawValue, "used up, silent or not")
+    }
+
+    func testSilentAssertionWindow() async throws {
+        _ = try await register(rk: true)
+        let up = CBOR.map([.text("up"): .bool(false)])
+        let silent = CBOR.map([.int(1): .text("github.com"), .int(2): .bytes(clientDataHash), .int(5): up])
+        let ga = CBOR.map([.int(1): .text("github.com"), .int(2): .bytes(clientDataHash)])
+        var (_, token) = try await getToken(permissions: 0x02)
+        clock += 29
+        var (status, _) = await call(0x02, withToken(silent, key: 6, token: try XCTUnwrap(token)))
+        XCTAssertEqual(status, 0, "within 30 s of the Touch ID")
+        clock += 2
+        (status, _) = await call(0x02, withToken(ga, key: 6, token: try XCTUnwrap(token)))
+        XCTAssertEqual(status, CTAPStatus.pinAuthInvalid.rawValue, "a silent assertion does not extend the 30 s")
+
+        // A new token: silent assertions only for its site, and only with a candidate.
+        (_, token) = try await getToken(permissions: 0x02)
+        (status, _) = await call(0x02, withToken(.map([.int(1): .text("other.example"),
+                                                     .int(2): .bytes(clientDataHash), .int(5): up]),
+                                                key: 6, token: try XCTUnwrap(token)))
+        XCTAssertEqual(status, CTAPStatus.pinAuthInvalid.rawValue, "the token is bound to github.com")
+        (status, _) = await call(0x02, withToken(.map([.int(1): .text("github.com"),
+                                                     .int(2): .bytes(clientDataHash), .int(5): up,
+                                                     .int(3): .array([.map([.text("id"): .bytes(Data(count: 32)),
+                                                                            .text("type"): .text("public-key")])])]),
+                                                key: 6, token: try XCTUnwrap(token)))
+        XCTAssertEqual(status, CTAPStatus.noCredentials.rawValue, "no candidates")
+        XCTAssertTrue(ui.signIns.isEmpty)
+    }
+
     func testTokenTouchIDIsInvalidated() async throws {
         _ = try await register(rk: true)
         func fresh() -> ScriptedUI.Authorization {

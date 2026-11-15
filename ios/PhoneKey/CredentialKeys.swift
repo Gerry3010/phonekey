@@ -66,12 +66,15 @@ final class SecureEnclaveKeys: CredentialKeys {
 
     func sign(id: Data, data: Data, reason: String, authorization: TouchIDAuthorization?) async throws -> Data {
         // A token's Touch ID, or the card's that has just been given; only
-        // without either does the signature ask on its own. Used up after.
-        let context = (authorization as? LAContext) ?? handoff?.take() ?? LAContext()
+        // without either does the signature ask on its own. A token's context
+        // may also sign silent assertions first, so the token invalidates it
+        // when it is used up (§10); any other is used up here.
+        let tokenContext = authorization as? LAContext
+        let context = tokenContext ?? handoff?.take() ?? LAContext()
         context.localizedReason = reason
         context.localizedCancelTitle = "Cancel"
         context.localizedFallbackTitle = ""
-        defer { context.invalidate() }
+        defer { if tokenContext == nil { context.invalidate() } }
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Data, Error>) in
                 // SecKeyCreateSignature blocks while Touch ID is shown.

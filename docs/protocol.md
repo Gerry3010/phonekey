@@ -426,7 +426,8 @@ comes back (see Host side).
   without matching credentials answers `0x2E` without any prompt (OpenSSH does
   this before enrolling a resident key). With matching credentials `up = false`
   answers `0x2B` (`UNSUPPORTED_OPTION`): a Secure Enclave key cannot sign
-  without Touch ID.
+  without Touch ID. With a `pinUvAuthToken` the token's Touch ID can sign
+  silently; see [Using a pinUvAuthToken](#using-a-pinuvauthtoken).
 - Several discoverable candidates: the phone lets the user pick one (it has a
   display), so the response never sets `numberOfCredentials` and
   `authenticatorGetNextAssertion` (`0x08`) answers `0x30` (`NOT_ALLOWED`).
@@ -517,8 +518,10 @@ being issued, and 600 s after being issued at the latest.
 `LAContext` that was evaluated for the credential keys' access control. So when
 a token gets `mc` or `ga` (from `0x06`, `0x09` or `0x05`), the phone evaluates
 Touch ID with `evaluateAccessControl(rule, .useKeySign, …)` and keeps that
-context with the token. It serves exactly one operation: the signature, plus
-the `hmac-secret` decryption in the same request. It is invalidated
+context with the token. It serves exactly one operation with user presence
+(the signature, plus the `hmac-secret` decryption in the same request) and,
+before that, silent assertions (`up = false`) for the token's RP within 30 s of
+the Touch ID (see "Silent assertions" below). It is invalidated
 explicitly (`LAContext.invalidate()`) when the token loses `mc`/`ga`, when it
 expires, when a new token replaces it and when the session ends, so a token's
 lifetime never means keys stay unlocked. A token with only `cm` keeps
@@ -590,10 +593,28 @@ From 3b, a makeCredential or getAssertion with a non-empty `pinUvAuthParam`:
   getAssertion) with Sign in and Other account, one tap and no second
   Touch ID. A token without an RP ID (`0x05`) first shows the site and waits
   for a tap. `excludeList` hits work as above.
-- Afterwards the token keeps no permissions for `mc` and `ga` (CTAP 2.1), and
-  its Touch ID is dropped. This holds whatever the outcome, also after Decline,
-  a timeout or `NO_CREDENTIALS`: a new operation needs a new token and a new
-  Touch ID.
+- After an operation with user presence the token keeps no permissions for
+  `mc` and `ga` (CTAP 2.1), and its Touch ID is dropped. This holds whatever
+  the outcome, also after Decline, a timeout or `NO_CREDENTIALS`: a new
+  operation needs a new token and a new Touch ID.
+- **Silent assertions.** A getAssertion with `options.up = false` and a valid
+  token with `ga` is answered as CTAP 2.1 §6.2.2 says, without a card and
+  without a prompt:
+  - The token's Touch ID signs for the first candidate (the first `allowList`
+    hit, or the first discoverable credential of the RP). No candidates:
+    `0x2E` (`NO_CREDENTIALS`).
+  - Flags are `UV` only (`0x04`, `0x84` with extensions), so UP is 0. The
+    counter goes up by one, and `hmac-secret` works as usual.
+  - Only within 30 s of the token's Touch ID; later `0x33`. A silent assertion
+    neither uses up the token's permissions nor counts as its first use, so it
+    does not extend those 30 s, and the one operation with user presence must
+    follow within them.
+
+  Firefox checks this way whether a credential exists before it signs in.
+  WebAuthn sites reject assertions without UP, so such a signature signs
+  nobody in. OpenSSH rejects it too, unless the key was made with
+  `no-touch-required`. Without a token, `up = false` stays as described under
+  getAssertion.
 
 A `pinUvAuthParam` together with `options.uv = true` is treated as if `uv` were
 absent.

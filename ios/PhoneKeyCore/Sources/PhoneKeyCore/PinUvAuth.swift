@@ -217,8 +217,10 @@ public final class CTAPSession: @unchecked Sendable {
 
     /// Checks `param` = authenticate(token, message) and the token's
     /// protocol, permission and scope. Any failure: PIN_AUTH_INVALID.
+    /// `silent`: a getAssertion with up = false, allowed only within the
+    /// first 30 s and not counted as a use, so it never extends them (§10).
     func useToken(param: Data, protocolNumber: Int?, message: Data, permission: UInt8,
-                  scope: TokenScope, now: Date) throws -> TokenUse {
+                  scope: TokenScope, silent: Bool = false, now: Date) throws -> TokenUse {
         guard let number = protocolNumber else { throw CTAPStatus.missingParameter }
         guard let proto = PinUvAuthProtocol(rawValue: number) else { throw CTAPStatus.invalidParameter }
         lock.lock()
@@ -232,7 +234,8 @@ public final class CTAPSession: @unchecked Sendable {
         }
         guard proto == current.proto,
               proto.verify(key: current.value, message: message, signature: param),
-              current.permissions & permission != 0
+              current.permissions & permission != 0,
+              !silent || age < Self.initialUsageLimit
         else { throw CTAPStatus.pinAuthInvalid }
         let signs = permission & (TokenPrompt.makeCredential | TokenPrompt.getAssertion) != 0
         switch scope {
@@ -251,14 +254,14 @@ public final class CTAPSession: @unchecked Sendable {
         case .any:
             break
         }
-        current.used = true
+        if !silent { current.used = true }
         token = current
         return TokenUse(authorization: signs ? current.authorization : nil)
     }
 
-    /// After a makeCredential or getAssertion with the token, whatever its
-    /// outcome: it keeps no permission for another one (CTAP 2.1), and its
-    /// Touch ID is invalidated.
+    /// After a makeCredential or getAssertion with user presence, whatever
+    /// its outcome: the token keeps no permission for another one (CTAP 2.1),
+    /// and its Touch ID is invalidated.
     func consumeSigningPermissions() {
         lock.lock()
         defer { lock.unlock() }
