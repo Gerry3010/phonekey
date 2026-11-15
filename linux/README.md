@@ -102,9 +102,36 @@ Then:
   auth protocols: the same salt must give the same secret (what unlocks LUKS).
 
 Not supported yet: listing resident keys (`ssh-keygen -K`, browser key
-management), `hmac-secret` (LUKS via `systemd-cryptenroll`), U2F-only sites, PINs.
-Keys are bound to this iPhone and not backed up: keep a second way to sign in
-everywhere.
+management), U2F-only sites, PINs. Keys are bound to this iPhone and not backed
+up: keep a second way to sign in everywhere.
+
+### Disk encryption (LUKS)
+
+The phone supports `hmac-secret` (Phase 3a), so `systemd-cryptenroll` can add it
+to a LUKS2 volume as a FIDO2 key. Opening the volume then needs the phone with
+the app open, and one Touch ID.
+
+```bash
+sudo systemd-cryptenroll --fido2-device=auto \
+  --fido2-with-client-pin=no --fido2-with-user-verification=yes /dev/sdXN
+sudo systemd-cryptsetup attach data /dev/sdXN - fido2-device=auto
+```
+
+- Enrolling asks for Touch ID twice: systemd creates a key on the phone, then
+  reads the secret once. Every open asks once.
+- This works for volumes you open after logging in, while `phonekey fido run`
+  is running, such as data partitions and external disks. The root volume at
+  boot would need the daemon and usbmuxd in the initramfs and is not covered.
+- `--fido2-with-client-pin=no` keeps Touch ID as the only check once the phone
+  has a PIN (Phase 3c). Without it, systemd would ask for that PIN.
+- Keep the passphrase key slot: the secret behind the FIDO2 slot exists only on
+  this phone. `sudo systemd-cryptenroll --wipe-slot=fido2 /dev/sdXN` removes the
+  FIDO2 slot again.
+- The key appears in PhoneKey under `io.systemd.cryptsetup`. Deleting it there
+  makes the FIDO2 slot useless; the passphrase still opens the volume.
+
+Tested with a LUKS2 file on the iPhone 7: `systemd-cryptenroll` as above,
+`cryptsetup open --token-only --test-passphrase` and `systemd-cryptsetup attach`.
 
 ## Layout
 
