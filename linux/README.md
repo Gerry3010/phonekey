@@ -100,6 +100,15 @@ Then:
   work on macOS too and check the phone's authenticator from the host side. If
   the phone offers `hmac-secret`, the self-test also checks it with both PIN/UV
   auth protocols: the same salt must give the same secret (what unlocks LUKS).
+- **When an application fails:** stop the service and run
+  `phonekey fido run -trace`. It logs each CTAP request with its command, RP ID,
+  options, list lengths and extension names, and the phone's status code. It
+  never logs keys, challenges, credential IDs or user IDs.
+  ```bash
+  systemctl --user stop phonekey-fido
+  phonekey fido run -trace
+  systemctl --user start phonekey-fido   # afterwards
+  ```
 
 Not supported yet: listing resident keys (`ssh-keygen -K`, browser key
 management), U2F-only sites, PINs. Keys are bound to this iPhone and not backed
