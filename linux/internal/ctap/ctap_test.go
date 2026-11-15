@@ -95,6 +95,36 @@ func TestRegisterAndVerify(t *testing.T) {
 	}
 }
 
+// An assertion with hmac-secret has ED but not AT: the extensions follow the
+// 37 fixed bytes directly (docs/protocol.md §10, Phase 3a).
+func TestAssertionWithExtensions(t *testing.T) {
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	h := sha256.Sum256([]byte("example.org"))
+	ad := binary.BigEndian.AppendUint32(append(h[:], FlagUP|FlagUV|FlagED), 7)
+	output := make([]byte, 48) // protocol 2: IV and one encrypted HMAC
+	ext, _ := enc.Marshal(map[string]any{"hmac-secret": output})
+	ad = append(ad, ext...)
+	cdh := sha256.Sum256([]byte("client data"))
+	digest := sha256.Sum256(append(append([]byte{}, ad...), cdh[:]...))
+	sig, _ := ecdsa.SignASN1(rand.Reader, key, digest[:])
+
+	a, err := VerifyAssertion(&key.PublicKey, "example.org", cdh[:], &GetAssertionResponse{AuthData: ad, Signature: sig})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, ok := a.Extensions["hmac-secret"].([]byte)
+	if a.Counter != 7 || !ok || len(got) != 48 {
+		t.Fatalf("parsed %+v", a)
+	}
+
+	if _, err := ParseAuthData(append(append([]byte{}, ad...), 0)); err == nil {
+		t.Fatal("trailing byte after the extensions accepted")
+	}
+	if _, err := ParseAuthData(ad[:37]); err == nil {
+		t.Fatal("ED without extensions accepted")
+	}
+}
+
 func TestParseAuthDataRejects(t *testing.T) {
 	if _, err := ParseAuthData(make([]byte, 36)); err == nil {
 		t.Fatal("short authData accepted")
