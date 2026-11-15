@@ -229,9 +229,9 @@ final class FIDOPrompts: ObservableObject {
             finish(.approved, nil)
         case let .signIn(prompt):
             approvedSummary = "Signed in to \(prompt.rpId) as \(chosen?.accountLabel ?? "")"
-            if let chosen, chosen.id != preselectedId, prompt.candidates.count > 1 {
-                pendingQuestion = SuggestionQuestion(rpId: prompt.rpId, account: chosen,
-                                                     current: prompt.candidates.filter { $0.suggested == true })
+            if let chosen {
+                pendingQuestion = SuggestionQuestion.after(signingInWith: chosen, preselectedId: preselectedId,
+                                                           candidates: prompt.candidates, rpId: prompt.rpId)
             }
             // The signature reuses this Touch ID instead of asking again.
             authContext = nil

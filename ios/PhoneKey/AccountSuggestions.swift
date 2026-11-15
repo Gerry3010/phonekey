@@ -40,6 +40,17 @@ extension StoredCredential {
 struct SuggestionQuestion {
     let rpId: String
     let account: StoredCredential
-    /// The accounts suggested for the site so far.
+    /// The other accounts suggested for the site so far.
     let current: [StoredCredential]
+
+    /// The question to ask after a sign-in, if any: only when the user picked
+    /// another account than the preselected one and that account is not
+    /// suggested already (with several suggested accounts, the one used last
+    /// is preselected, so picking another suggested one is no news).
+    static func after(signingInWith chosen: StoredCredential, preselectedId: Data?,
+                      candidates: [StoredCredential], rpId: String) -> SuggestionQuestion? {
+        guard candidates.count > 1, chosen.id != preselectedId, chosen.suggested != true else { return nil }
+        return SuggestionQuestion(rpId: rpId, account: chosen,
+                                  current: candidates.filter { $0.suggested == true && $0.id != chosen.id })
+    }
 }
