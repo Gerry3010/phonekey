@@ -494,11 +494,17 @@ Parameters: `pinUvAuthProtocol`, `keyAgreement` (key 3), `permissions` (key 9),
    `cm` (`0x04`): `0x40` (`UNAUTHORIZED_PERMISSION`). `mc` or `ga` without
    `rpId`: `0x14`.
 2. iOS has locked Touch ID: `0x3C` (`UV_BLOCKED`).
-3. The phone shows the host's name and what the token is for: registering or
-   signing in at `rpId` (`mc`, `ga`), or listing and deleting passkeys (`cm`).
-   Then Touch ID.
-4. Declined: `0x27` (`OPERATION_DENIED`). No answer within 60 s: `0x2F`.
-   Touch ID failed: `0x3F` (`UV_INVALID`). Locked during the attempt: `0x3C`.
+3. The phone shows a card like the makeCredential one: the host's name, the
+   site (`rpId`) and what the token is for (registering or signing in for
+   `mc`/`ga`, listing and deleting passkeys for `cm`), and opens Touch ID at
+   once. From 3b on this is the path Chrome takes for every registration and
+   sign-in (it sees `uv` and `pinUvAuthToken`), so Touch ID comes before the
+   account choice there.
+4. Cancelling or failing Touch ID does not decline, as for makeCredential: the
+   card stays with Touch ID and Decline. Decline: `0x27` (`OPERATION_DENIED`).
+   No answer within 60 s: `0x2F`. Locked by iOS: `0x3C` (`UV_BLOCKED`). The
+   phone never sends `0x3F` (`UV_INVALID`): with `preferredPlatformUvAttempts`
+   1, Chrome would take it as the cue to ask for the PIN.
 5. Success: a new random 32-byte token replaces any earlier token of this
    session. It carries the permissions, `rpId` if given, and "user verified"
    and "user present" (Touch ID proves both). Answer `{2: encrypt(shared
@@ -506,6 +512,19 @@ Parameters: `pinUvAuthProtocol`, `keyAgreement` (key 3), `permissions` (key 9),
 
 The token expires when the session ends, when it is not used within 30 s of
 being issued, and 600 s after being issued at the latest.
+
+**Where the token's Touch ID goes.** The Secure Enclave only signs with an
+`LAContext` that was evaluated for the credential keys' access control. So when
+a token gets `mc` or `ga` (from `0x06`, `0x09` or `0x05`), the phone evaluates
+Touch ID with `evaluateAccessControl(rule, .useKeySign, …)` and keeps that
+context with the token. It serves exactly one operation: the signature, plus
+the `hmac-secret` decryption in the same request. It is invalidated when the
+token loses `mc`/`ga`, when the token expires, and when the session ends, so a
+token's lifetime never means keys stay unlocked. A token with only `cm` keeps
+no context. Whether a `.useKeySign` context also covers the ECIES decryption
+(a key exchange in the Enclave) is checked on the iPhone first thing in 3a and
+written down here; if it does not, the decryption gets its own evaluation
+inside the same prompt.
 
 #### PIN (3c)
 
@@ -519,23 +538,29 @@ alone unlocks nothing.
   usable only after Touch ID; `…ThisDeviceOnly`, never synced, never on the
   host. Comparing a PIN therefore always happens inside a Touch ID prompt, and
   a copied Keychain alone does not allow guessing it offline.
-- **Policy.** 4 to 63 bytes of UTF-8 (`newPinEnc` is the PIN padded with zeros
-  to 64 bytes, as in CTAP). Shorter or longer: `0x37` (`PIN_POLICY_VIOLATION`).
-- **Retries.** 8 in total, reset by a correct PIN. A wrong PIN answers `0x31`
-  (`PIN_INVALID`) and replaces the session's key agreement key. Three wrong
-  PINs in a row block the session: `0x34` (`PIN_AUTH_BLOCKED`) until the host
-  reconnects. At 0 retries the PIN is blocked: `0x32` (`PIN_BLOCKED`).
+- **Policy.** At least 4 Unicode code points (`minPINLength` counts code
+  points) and at most 63 bytes of UTF-8 (`newPinEnc` is the PIN padded with
+  zeros to 64 bytes, as in CTAP). Otherwise: `0x37` (`PIN_POLICY_VIOLATION`).
+- **Retries.** 8 in total, stored on the phone (Keychain, `…ThisDeviceOnly`),
+  so they survive sessions and app restarts; a correct PIN resets them. A
+  wrong PIN answers `0x31` (`PIN_INVALID`) and replaces the session's key
+  agreement key. Three wrong PINs in a row block only the session: `0x34`
+  (`PIN_AUTH_BLOCKED`) until the host reconnects. At 0 retries the PIN is
+  blocked: `0x32` (`PIN_BLOCKED`).
 - **setPIN** (`0x03`): parameters `keyAgreement`, `newPinEnc` (key 5),
   `pinUvAuthParam` = `authenticate(shared secret, newPinEnc)`. A PIN already
-  set: `0x30` (`NOT_ALLOWED`). The phone shows the host's name, asks for
-  Touch ID, then stores the PIN.
+  set: `0x33` (`PIN_AUTH_INVALID`), as CTAP 2.1 §6.5.5.5 says. The phone shows
+  the host's name, asks for Touch ID, then stores the PIN.
 - **changePIN** (`0x04`): adds `pinHashEnc` (key 6); `pinUvAuthParam` =
   `authenticate(shared secret, newPinEnc || pinHashEnc)`. Touch ID, then the
   old PIN is checked (retries as above), then the new one stored. Every token
   of every session is invalidated.
 - **getPinToken** (`0x05`, for CTAP 2.0 clients): `keyAgreement`,
   `pinHashEnc`. Touch ID, then the PIN check; the token gets `mc` and `ga`
-  without an RP ID.
+  without an RP ID. As in CTAP 2.1 it is bound to the `rp.id` of its first
+  use. Because its prompt could not name the site, that first operation shows
+  the site and account and waits for a tap before signing (no second
+  Touch ID), so the phone still shows the site before every signature.
 - **getPinUvAuthTokenUsingPinWithPermissions** (`0x09`): `keyAgreement`,
   `pinHashEnc`, `permissions`, `rpId`; permission checks as for `0x06`. The
   prompt says what the token is for, then Touch ID, then the PIN check.
@@ -555,9 +580,13 @@ From 3b, a makeCredential or getAssertion with a non-empty `pinUvAuthParam`:
   `clientDataHash` with the session's token, if the token has expired, lacks
   the `mc` or `ga` permission, or names another RP ID.
 - Otherwise there is no second Touch ID: the Touch ID of the token request
-  authorizes this one operation. The phone still shows the account it is
-  registering, and the account choice if there are several discoverable
-  candidates. `excludeList` hits work as above.
+  authorizes this one operation (see "Where the token's Touch ID goes"). For a
+  registration the phone shows the account and confirms it when done. For a
+  sign-in with one candidate the signature follows without further
+  interaction; with several, the card shows the preselected account (as in
+  getAssertion) with Sign in and Other account, one tap and no second
+  Touch ID. A token without an RP ID (`0x05`) first shows the site and waits
+  for a tap. `excludeList` hits work as above.
 - Afterwards the token keeps no permissions for `mc` and `ga` (CTAP 2.1); a new
   operation needs a new token and a new Touch ID.
 
