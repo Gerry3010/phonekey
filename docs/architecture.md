@@ -45,7 +45,7 @@ The exact format is in [protocol.md](protocol.md).
 | Area | iOS app | Linux daemon |
 |---|---|---|
 | Session | TCP listener, handshake, pairing UI | usbmuxd client, handshake, QR display |
-| Security key | CTAP2 authenticator (U2F later), ES256 keys in the Secure Enclave, Touch ID per signature, shows the site before signing | CTAPHID over `/dev/uhid`, so browsers, `ssh-keygen -t ecdsa-sk` and `pam-u2f` see a normal key |
+| Security key | CTAP2 authenticator (no U2F), ES256 keys in the Secure Enclave, Touch ID per signature, shows the site before signing | CTAPHID over `/dev/uhid`, so browsers, `ssh-keygen -t ecdsa-sk` and `pam-u2f` see a normal key |
 | Camera | `AVCaptureSession`, H.264 (VideoToolbox) or JPEG | `v4l2loopback` device, photo tool |
 | Microphone | `AVAudioEngine` | PipeWire source, recording tool |
 
@@ -67,7 +67,8 @@ The exact format is in [protocol.md](protocol.md).
 0. **Project init.** Repo, Xcode project, docs. *(done)*
 1. **Transport and desk mode.** usbmuxd TCP channel, encrypted session, QR pairing, desk mode, photo tool as the first end-to-end feature. Protocol spec for the daemon. *(done; verified on an iPhone 7 with iOS 15.8.2)*
 2. **FIDO2 security key and passkeys.** The phone is a full CTAP2 authenticator: discoverable credentials, user verification via Touch ID (any enrolled finger), ES256 keys in the Secure Enclave, attestation "none", `credProtect`. The host tunnels CTAPHID through a virtual `/dev/uhid` device that exists only while the phone is connected. *(done; verified with libfido2 and OpenSSH in a VM and on the iPhone 7; browser test on real Linux open)*
-3. **More FIDO.** Credential management (`ssh-keygen -K`, browser key lists), `hmac-secret` (LUKS via `systemd-cryptenroll`), U2F/CTAP1.
+3. **More FIDO**, in three steps (protocol §10): 3a `hmac-secret` (LUKS via `systemd-cryptenroll`), 3b `pinUvAuthToken` via Touch ID and credential management (`FIDO_2_1`), 3c a PIN that only works together with Touch ID, because `ssh-keygen -K` and Chrome's key management insist on one.
+   - U2F/CTAP1: only if a service needs it.
 4. **Streaming and voice.** Webcam and microphone streams.
 5. **macOS host (optional).** Needs a DriverKit virtual HID device and an entitlement from Apple.
 
