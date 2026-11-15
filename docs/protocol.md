@@ -370,11 +370,16 @@ registered.
   display), so the response never sets `numberOfCredentials` and
   `authenticatorGetNextAssertion` (`0x08`) answers `0x30`
   (`CTAP2_ERR_NOT_ALLOWED`).
-- The phone shows the site and the account and opens Touch ID at once; with
-  several candidates for the newest one, and "Other account" lists the rest.
-  Cancelling Touch ID works as for makeCredential. That one Touch ID also
-  unlocks the signature. Flags `UP | UV` (`0x05`); the per-credential counter
-  goes up by one.
+- The phone shows the site and the account and opens Touch ID at once. With
+  several candidates it preselects one: an account the user marked as
+  suggested for the site, else the one used last, else the newest. "Other
+  account" lists them all. Cancelling Touch ID works as for makeCredential.
+  That one Touch ID also unlocks the signature. Flags `UP | UV` (`0x05`); the
+  per-credential counter goes up by one.
+- After signing in with another account than the preselected one, the phone
+  asks whether to suggest it for the site from now on, as well as or instead
+  of the current suggestions. This happens after the answer has gone out and
+  is only stored on the phone; hosts see nothing of it.
 - Once the answer has gone out, the phone shows for a moment that the
   registration or sign-in is done, so one request is visibly over before the
   next one starts.

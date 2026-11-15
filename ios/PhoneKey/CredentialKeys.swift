@@ -143,9 +143,18 @@ final class KeychainCredentialStore: ObservableObject, CredentialStore, @uncheck
         try mutate { items in
             guard let i = items.firstIndex(where: { $0.id == id }) else { throw CTAPStatus.noCredentials }
             items[i].signCount &+= 1
+            items[i].lastUsed = Date()
             counter = items[i].signCount
         }
         return counter
+    }
+
+    /// Marks an account as suggested first on its site, or not.
+    func setSuggested(id: Data, _ suggested: Bool) {
+        try? mutate { items in
+            guard let i = items.firstIndex(where: { $0.id == id }) else { return }
+            items[i].suggested = suggested ? true : nil
+        }
     }
 
     /// Deletes the key and the metadata. Cannot be undone.

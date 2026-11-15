@@ -476,7 +476,8 @@ footer { margin-top: 2rem; padding-top: 1rem; border-top: 1px solid var(--line);
     <ol class="steps">
       <li><div>Der Browser schickt <code>authenticatorGetAssertion</code> mit der Website und meist einer Liste erlaubter Credential-IDs. Meldest du dich per Passkey ohne Benutzernamen an, ist die Liste leer.</div></li>
       <li><div>Die App sucht passende Schlüssel. Findet sie keinen, antwortet sie sofort mit <code>NO_CREDENTIALS</code>, ohne etwas anzuzeigen.</div></li>
-      <li><div>Die App zeigt Website und Konto und öffnet sofort Touch ID. Gibt es für die Website mehrere Konten, ist das neueste vorgewählt („1 von 4 Konten“). Über „Other account“ wählst du ein anderes aus einer Liste mit Erstell- und Nutzungsdatum.</div></li>
+      <li><div>Die App zeigt Website und Konto und öffnet sofort Touch ID. Gibt es für die Website mehrere Konten, ist eines vorgewählt: ein Konto, das du für die Website als Vorschlag markiert hast (Stern), sonst das zuletzt benutzte, sonst das neueste. Über „Other account“ wählst du ein anderes, die Liste zeigt erst die Vorschläge, dann die übrigen Konten.</div></li>
+      <li><div>Meldest du dich mit einem anderen als dem vorgewählten Konto an, fragt die App nach dem „✓“, ob sie es für die Website künftig vorschlagen soll: zusätzlich, statt eines bisherigen Vorschlags oder nein. Die Frage kommt erst, wenn die Antwort beim Rechner ist, und bleibt auf dem iPhone. In der App setzt oder entfernst du Vorschläge auch per Wischen nach rechts in „Passkeys &amp; security keys“.</div></li>
       <li><div>Dieses eine Touch ID gibt auch den Schlüssel im Secure Enclave zum Signieren frei. Die Antwort trägt die Flags „anwesend“ und „verifiziert“, und der Zähler des Schlüssels steigt um eins.</div></li>
       <li><div>Der Browser bekommt die Signatur, bei Passkeys auch den Benutzer. Die Website prüft sie mit dem gespeicherten öffentlichen Schlüssel.</div></li>
     </ol>

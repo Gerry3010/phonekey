@@ -27,12 +27,17 @@ struct FIDOPromptOverlay: View {
             .preferredColorScheme(.dark)
             .transition(.opacity)
         } else if let confirmation = prompts.confirmation {
-            // The request is done: says so for a moment, then goes away.
+            // The request is done: says so for a moment, then goes away. After
+            // signing in with another account than the suggested one it also
+            // asks whether to suggest that one from now on.
             ZStack {
                 Color.black.opacity(0.88).ignoresSafeArea()
                 VStack(spacing: 12) {
                     Image(systemName: "checkmark.circle.fill").font(.system(size: 44)).foregroundColor(.green)
                     Text(confirmation).font(.headline).multilineTextAlignment(.center)
+                    if let question = prompts.question {
+                        suggestionQuestion(question)
+                    }
                 }
                 .padding(28)
                 .frame(maxWidth: 360)
@@ -41,7 +46,35 @@ struct FIDOPromptOverlay: View {
             }
             .preferredColorScheme(.dark)
             .transition(.opacity)
-            .allowsHitTesting(false)
+            .allowsHitTesting(prompts.question != nil)
+        }
+    }
+
+    private func suggestionQuestion(_ question: SuggestionQuestion) -> some View {
+        VStack(spacing: 10) {
+            Divider()
+            Text("Suggest \(question.account.accountLabel) for \(question.rpId) from now on?")
+                .multilineTextAlignment(.center)
+            if question.current.isEmpty {
+                Button(action: prompts.suggestAlso) {
+                    Text("Suggest").frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+            } else {
+                Button(action: prompts.suggestAlso) {
+                    Text("As well").frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                ForEach(question.current.prefix(2)) { other in
+                    Button {
+                        prompts.suggestInstead(of: other)
+                    } label: {
+                        Text("Instead of \(other.accountLabel)").frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                }
+            }
+            Button("No", action: prompts.dontSuggest)
         }
     }
 
@@ -74,10 +107,13 @@ struct FIDOPromptOverlay: View {
                 declineButton()
             } else if let chosen = prompts.chosen {
                 VStack(spacing: 2) {
-                    Label("as \(chosen.accountLabel)", systemImage: "person.crop.circle")
+                    Label("as \(chosen.accountLabel)", systemImage: chosen.suggested == true ? "star.fill" : "person.crop.circle")
                         .foregroundColor(.secondary)
                     if p.candidates.count > 1 {
-                        Text("\(p.candidates.count) accounts for this site").font(.caption).foregroundColor(.secondary)
+                        Text("\(chosen.suggestionReason) · \(p.candidates.count) accounts for this site")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .multilineTextAlignment(.center)
                     }
                 }
                 touchIDButtons()
@@ -103,50 +139,69 @@ struct FIDOPromptOverlay: View {
         }
     }
 
-    /// "Which account?": one row per stored account, newest first. Long
-    /// lists scroll so the card keeps Decline and the timer on screen.
+    /// "Which account?": the suggested accounts first, then the others, each
+    /// group in suggestion order. Long lists scroll so the card keeps Decline
+    /// and the timer on screen.
     private func accountList(_ candidates: [StoredCredential]) -> some View {
-        let sorted = candidates.sorted { $0.created > $1.created }
+        let ordered = candidates.orderedForSuggestion()
+        let suggested = ordered.filter { $0.suggested == true }
+        let others = ordered.filter { $0.suggested != true }
         return VStack(alignment: .leading, spacing: 8) {
             Text("Which account?").font(.headline)
             Group {
-                if sorted.count > 4 {
-                    ScrollView { accountRows(sorted) }.frame(height: 260)
+                if ordered.count > 4 {
+                    ScrollView { accountGroups(suggested: suggested, others: others) }.frame(height: 260)
                 } else {
-                    accountRows(sorted)
+                    accountGroups(suggested: suggested, others: others)
+                }
+            }
+        }
+    }
+
+    private func accountGroups(suggested: [StoredCredential], others: [StoredCredential]) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if !suggested.isEmpty {
+                accountGroup("Suggested", suggested)
+            }
+            if !others.isEmpty {
+                accountGroup(suggested.isEmpty ? nil : "Other accounts", others)
+            }
+        }
+    }
+
+    private func accountGroup(_ title: String?, _ accounts: [StoredCredential]) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if let title {
+                Text(title.uppercased()).font(.caption2).foregroundColor(.secondary).padding(.leading, 4)
+            }
+            VStack(spacing: 0) {
+                ForEach(accounts) { credential in
+                    Button {
+                        prompts.choose(credential)
+                    } label: {
+                        HStack {
+                            if credential.suggested == true {
+                                Image(systemName: "star.fill").font(.caption).foregroundColor(.yellow)
+                            }
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(credential.accountLabel).foregroundColor(.primary)
+                                Text(credential.usageLine).font(.caption).foregroundColor(.secondary)
+                            }
+                            Spacer()
+                            Image(systemName: "chevron.right").font(.caption).foregroundColor(.secondary)
+                        }
+                        .padding(.vertical, 10)
+                        .padding(.horizontal, 12)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    if credential.id != accounts.last?.id {
+                        Divider().padding(.leading, 12)
+                    }
                 }
             }
             .background(RoundedRectangle(cornerRadius: 12).fill(Color(.tertiarySystemBackground)))
             .clipShape(RoundedRectangle(cornerRadius: 12))
-        }
-    }
-
-    private func accountRows(_ sorted: [StoredCredential]) -> some View {
-        VStack(spacing: 0) {
-            ForEach(sorted) { credential in
-                Button {
-                    prompts.choose(credential)
-                } label: {
-                    HStack {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(credential.accountLabel).foregroundColor(.primary)
-                            Text("created \(credential.created.formatted(date: .abbreviated, time: .shortened))"
-                                + " · used \(credential.signCount)×")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-                        Spacer()
-                        Image(systemName: "chevron.right").font(.caption).foregroundColor(.secondary)
-                    }
-                    .padding(.vertical, 10)
-                    .padding(.horizontal, 12)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                if credential.id != sorted.last?.id {
-                    Divider().padding(.leading, 12)
-                }
-            }
         }
     }
 
@@ -210,7 +265,12 @@ struct CredentialsView: View {
                 Section(site) {
                     ForEach(credentials) { credential in
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(credential.accountLabel)
+                            HStack(spacing: 6) {
+                                Text(credential.accountLabel)
+                                if credential.suggested == true {
+                                    Image(systemName: "star.fill").font(.caption).foregroundColor(.yellow)
+                                }
+                            }
                             Text("\(credential.discoverable ? "Passkey" : "Security key") · "
                                 + "created \(credential.created.formatted(date: .abbreviated, time: .omitted)) · "
                                 + "used \(credential.signCount)×")
@@ -219,6 +279,15 @@ struct CredentialsView: View {
                         }
                         .swipeActions {
                             Button("Delete", role: .destructive) { pendingDelete = credential }
+                        }
+                        .swipeActions(edge: .leading) {
+                            if credential.suggested == true {
+                                Button("Don't suggest") { store.setSuggested(id: credential.id, false) }
+                                    .tint(.gray)
+                            } else {
+                                Button("Suggest") { store.setSuggested(id: credential.id, true) }
+                                    .tint(.yellow)
+                            }
                         }
                     }
                 }

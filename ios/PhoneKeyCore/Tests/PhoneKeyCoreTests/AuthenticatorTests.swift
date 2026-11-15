@@ -137,6 +137,16 @@ final class AuthenticatorTests: XCTestCase {
         XCTAssertEqual(info?[8]?.int, 32)
     }
 
+    /// Credentials saved before `lastUsed` and `suggested` existed still load.
+    func testStoredCredentialDecodesOlderData() throws {
+        let old = #"{"id":"AQI=","rpId":"github.com","userId":"Aw==","userName":"gerry","discoverable":true,"created":700000000,"signCount":3}"#
+        let credential = try JSONDecoder().decode(StoredCredential.self, from: Data(old.utf8))
+        XCTAssertEqual(credential.rpId, "github.com")
+        XCTAssertEqual(credential.signCount, 3)
+        XCTAssertNil(credential.lastUsed)
+        XCTAssertNil(credential.suggested)
+    }
+
     /// A full batch, as Chrome sends it after reading getInfo 7 and 8, fits the
     /// message size and finds the credential among foreign IDs.
     func testFullAllowListBatch() async throws {

@@ -55,6 +55,7 @@ final class AppModel: ObservableObject {
         fidoPrompts.handoff = handoff
         let keys = SecureEnclaveKeys(handoff: handoff)
         credentials = KeychainCredentialStore(keys: keys)
+        fidoPrompts.credentials = credentials
         authenticator = Authenticator(store: credentials, keys: keys, ui: fidoPrompts)
 
         do {

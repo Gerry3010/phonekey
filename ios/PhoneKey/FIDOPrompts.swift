@@ -6,10 +6,12 @@ import SwiftUI
 /// The authenticator's screen: one prompt at a time, timing out after 60 s.
 ///
 /// Registrations and sign-ins open Touch ID right away; with several accounts
-/// for the newest one, and "Other account" lists the rest. Cancelling Touch ID
-/// does not decline: the card stays with the details and offers Touch ID again.
-/// Only the Decline button declines. After the computer got its answer, a short
-/// confirmation shows that the request is done.
+/// for the suggested one (marked as suggested, else last used, else newest),
+/// and "Other account" lists the rest. Cancelling Touch ID does not decline:
+/// the card stays with the details and offers Touch ID again. Only the Decline
+/// button declines. After the computer got its answer, a short confirmation
+/// shows that the request is done; if another account than the suggested one
+/// was used, it asks whether to suggest that one from now on.
 @MainActor
 final class FIDOPrompts: ObservableObject {
     enum Kind {
@@ -39,12 +41,16 @@ final class FIDOPrompts: ObservableObject {
     @Published private(set) var pickingAccount = false
     /// "Signed in as …" for a moment after a request succeeded.
     @Published private(set) var confirmation: String?
+    /// Asked with the confirmation: suggest the account just used from now on?
+    @Published private(set) var question: SuggestionQuestion?
     /// The computer the current CTAP request came from.
     var hostName: String?
     /// Told when a prompt appears (true) or goes away (false).
     var onActiveChange: ((Bool) -> Void)?
     /// Carries the Touch ID of an approved sign-in to the signature.
     var handoff: TouchIDHandoff?
+    /// Where the answer to a suggestion question is stored.
+    var credentials: KeychainCredentialStore?
 
     private var nextId = 0
     private var continuation: CheckedContinuation<(UserDecision, StoredCredential?), Never>?
@@ -55,6 +61,10 @@ final class FIDOPrompts: ObservableObject {
     /// What the user approved, shown as the confirmation once the request
     /// really succeeded.
     private var approvedSummary: String?
+    /// The account the sign-in card preselected, and the question to ask if
+    /// the user signed in with another one.
+    private var preselectedId: Data?
+    private var pendingQuestion: SuggestionQuestion?
     private var confirmationTask: Task<Void, Never>?
     private var confirmationShown = Date.distantPast
     /// The confirmation stays at least this long before the next prompt
@@ -157,16 +167,50 @@ final class FIDOPrompts: ObservableObject {
 
     /// Called once the computer has the answer to the current request.
     func requestFinished(succeeded: Bool) {
-        defer { approvedSummary = nil }
+        defer {
+            approvedSummary = nil
+            pendingQuestion = nil
+        }
         guard succeeded, active == nil, let summary = approvedSummary else { return }
         confirmation = summary
+        question = pendingQuestion
         confirmationShown = Date()
+        // A question waits a while for an answer; a plain confirmation goes soon.
+        let seconds: UInt64 = question == nil ? 2 : 20
         confirmationTask?.cancel()
         confirmationTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            try? await Task.sleep(nanoseconds: seconds * 1_000_000_000)
             guard !Task.isCancelled else { return }
-            self?.confirmation = nil
+            self?.endConfirmation()
         }
+    }
+
+    // MARK: Suggestion question
+
+    /// Suggest the account as well as the current ones.
+    func suggestAlso() {
+        guard let question else { return }
+        credentials?.setSuggested(id: question.account.id, true)
+        endConfirmation()
+    }
+
+    /// Suggest the account instead of `other`.
+    func suggestInstead(of other: StoredCredential) {
+        guard let question else { return }
+        credentials?.setSuggested(id: other.id, false)
+        credentials?.setSuggested(id: question.account.id, true)
+        endConfirmation()
+    }
+
+    func dontSuggest() {
+        endConfirmation()
+    }
+
+    private func endConfirmation() {
+        confirmationTask?.cancel()
+        confirmationTask = nil
+        confirmation = nil
+        question = nil
     }
 
     func acknowledge() {
@@ -185,6 +229,10 @@ final class FIDOPrompts: ObservableObject {
             finish(.approved, nil)
         case let .signIn(prompt):
             approvedSummary = "Signed in to \(prompt.rpId) as \(chosen?.accountLabel ?? "")"
+            if let chosen, chosen.id != preselectedId, prompt.candidates.count > 1 {
+                pendingQuestion = SuggestionQuestion(rpId: prompt.rpId, account: chosen,
+                                                     current: prompt.candidates.filter { $0.suggested == true })
+            }
             // The signature reuses this Touch ID instead of asking again.
             authContext = nil
             handoff?.put(context)
@@ -248,11 +296,13 @@ final class FIDOPrompts: ObservableObject {
         authenticating = false
         pickingAccount = false
         approvedSummary = nil
-        confirmationTask?.cancel()
-        confirmation = nil
+        pendingQuestion = nil
+        endConfirmation() // an open question counts as "no"
         chosen = nil
+        preselectedId = nil
         if case let .signIn(prompt) = kind {
-            chosen = prompt.candidates.max { $0.created < $1.created }
+            chosen = prompt.candidates.orderedForSuggestion().first
+            preselectedId = chosen?.id
         }
         active = Active(id: id, kind: kind, hostName: hostName, deadline: Date().addingTimeInterval(Self.timeout))
         onActiveChange?(true)
