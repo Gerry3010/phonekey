@@ -135,7 +135,9 @@ func fidoSelftest(ctx context.Context, args []string) error {
 		}
 	}
 
-	fmt.Printf("\n2/%d Sign in with the passkey (no allow list): pick %q, then Touch ID.\n", steps, label)
+	// Other computers' self-tests leave their own phonekey.test accounts, and
+	// the phone preselects the one used last.
+	fmt.Printf("\n2/%d Sign in with the passkey (no allow list): pick %q (under \"Other account\" if another one is preselected), then Touch ID.\n", steps, label)
 	cdh := random(32)
 	var ga ctap.GetAssertionResponse
 	if err := ctap.Call(call, ctap.CmdGetAssertion, ctap.GetAssertionRequest{RPID: *rpID, ClientDataHash: cdh}, &ga); err != nil {
@@ -144,7 +146,7 @@ func fidoSelftest(ctx context.Context, args []string) error {
 	// Compare the credential first: a passkey from an earlier run would fail
 	// the signature check against this run's key, which reads like a bug.
 	if !bytes.Equal(ga.Credential.ID, reg.CredentialID) {
-		return fmt.Errorf("FAIL: the phone signed with an older %s passkey. Delete the old test passkeys in PhoneKey → Passkeys & security keys and run the self-test again", *rpID)
+		return fmt.Errorf("FAIL: the phone signed with another %s passkey, not %q. Run the self-test again and pick %q under \"Other account\", or delete the other test passkeys in PhoneKey → Passkeys & security keys", *rpID, label, label)
 	}
 	fmt.Println("  ok: same credential")
 	a1, err := ctap.VerifyAssertion(reg.PublicKey, *rpID, cdh, &ga)
