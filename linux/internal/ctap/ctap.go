@@ -119,6 +119,7 @@ type MakeCredentialRequest struct {
 	User           User            `cbor:"3,keyasint"`
 	Params         []CredParam     `cbor:"4,keyasint"`
 	Exclude        []Descriptor    `cbor:"5,keyasint,omitempty"`
+	Extensions     map[string]any  `cbor:"6,keyasint,omitempty"`
 	Options        map[string]bool `cbor:"7,keyasint,omitempty"`
 }
 
@@ -132,6 +133,7 @@ type GetAssertionRequest struct {
 	RPID           string          `cbor:"1,keyasint"`
 	ClientDataHash []byte          `cbor:"2,keyasint"`
 	Allow          []Descriptor    `cbor:"3,keyasint,omitempty"`
+	Extensions     map[string]any  `cbor:"4,keyasint,omitempty"`
 	Options        map[string]bool `cbor:"5,keyasint,omitempty"`
 }
 
