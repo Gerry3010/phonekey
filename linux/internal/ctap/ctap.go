@@ -160,8 +160,18 @@ func ParseAuthData(b []byte) (*AuthData, error) {
 		return nil, errors.New("authenticator data too short")
 	}
 	a := &AuthData{RPIDHash: b[:32], Flags: b[32], Counter: binary.BigEndian.Uint32(b[33:37])}
+	dec, _ := cbor.DecOptions{}.DecMode()
 	if a.Flags&FlagAT == 0 {
-		if len(b) != 37 {
+		// An assertion: with ED (hmac-secret, credProtect) the extensions
+		// follow the 37 fixed bytes directly.
+		rem := b[37:]
+		if a.Flags&FlagED != 0 {
+			var err error
+			if rem, err = dec.UnmarshalFirst(rem, &a.Extensions); err != nil {
+				return nil, fmt.Errorf("extensions: %w", err)
+			}
+		}
+		if len(rem) != 0 {
 			return nil, errors.New("unexpected bytes after authenticator data")
 		}
 		return a, nil
@@ -184,7 +194,6 @@ func ParseAuthData(b []byte) (*AuthData, error) {
 		X   []byte `cbor:"-2,keyasint"`
 		Y   []byte `cbor:"-3,keyasint"`
 	}
-	dec, _ := cbor.DecOptions{}.DecMode()
 	rem, err := dec.UnmarshalFirst(rest, &key)
 	if err != nil {
 		return nil, fmt.Errorf("COSE key: %w", err)
