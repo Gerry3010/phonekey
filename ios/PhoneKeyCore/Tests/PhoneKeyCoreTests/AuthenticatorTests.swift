@@ -155,6 +155,7 @@ final class AuthenticatorTests: XCTestCase {
     func testNewPasskeyReplacesSameAccount() async throws {
         let (first, _) = try await register(rk: true)
         store.items[0].suggested = true
+        store.items[0].localName = "Private"
         let (other, _) = try await register(rk: true, user: "other")
         let (nonResident, _) = try await register(rk: false)
         let (second, _) = try await register(rk: true)
@@ -168,6 +169,7 @@ final class AuthenticatorTests: XCTestCase {
         XCTAssertNil(keys.keys[first], "its key is deleted")
         XCTAssertNotNil(keys.keys[second])
         XCTAssertEqual(store.credential(id: second)?.suggested, true, "keeps the suggestion")
+        XCTAssertEqual(store.credential(id: second)?.accountLabel, "Private", "keeps the user's own name")
     }
 
     /// A full batch, as Chrome sends it after reading getInfo 7 and 8, fits the

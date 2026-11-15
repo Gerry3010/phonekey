@@ -93,7 +93,7 @@ struct FIDOPromptOverlay: View {
         switch active.kind {
         case let .registration(p):
             Text(p.passkey ? "Create a passkey" : "Register security key").font(.title3.bold())
-            site(p.rpId, name: p.rpName)
+            site(p.rpId, name: ownSiteName(p.rpId) ?? p.rpName)
             if let account = p.userName ?? p.userDisplayName {
                 Label(account, systemImage: "person.crop.circle").foregroundColor(.secondary)
             }
@@ -101,7 +101,7 @@ struct FIDOPromptOverlay: View {
 
         case let .signIn(p):
             Text("Sign in to").font(.title3.bold())
-            site(p.rpId, name: nil)
+            site(p.rpId, name: ownSiteName(p.rpId))
             if prompts.pickingAccount {
                 accountList(p.candidates)
                 declineButton()
@@ -205,6 +205,12 @@ struct FIDOPromptOverlay: View {
         }
     }
 
+    /// The user's own name for the site. Shown under the real address, never
+    /// instead of it: the address is what the request is really for.
+    private func ownSiteName(_ rpId: String) -> String? {
+        prompts.credentials?.siteNames[rpId]
+    }
+
     private func site(_ rpId: String, name: String?) -> some View {
         VStack(spacing: 2) {
             Text(rpId).font(.title2.weight(.semibold)).lineLimit(2).minimumScaleFactor(0.6)
@@ -246,63 +252,3 @@ struct FIDOPromptOverlay: View {
     }
 }
 
-/// Stored passkeys and security key registrations, grouped by site.
-struct CredentialsView: View {
-    @ObservedObject var store: KeychainCredentialStore
-    @State private var pendingDelete: StoredCredential?
-
-    private var sites: [(String, [StoredCredential])] {
-        Dictionary(grouping: store.all, by: \.rpId).sorted { $0.key < $1.key }
-    }
-
-    var body: some View {
-        List {
-            if store.all.isEmpty {
-                Text("No keys yet. Register PhoneKey as a security key or passkey on a website.")
-                    .foregroundColor(.secondary)
-            }
-            ForEach(sites, id: \.0) { site, credentials in
-                Section(site) {
-                    ForEach(credentials) { credential in
-                        VStack(alignment: .leading, spacing: 2) {
-                            HStack(spacing: 6) {
-                                Text(credential.accountLabel)
-                                if credential.suggested == true {
-                                    Image(systemName: "star.fill").font(.caption).foregroundColor(.yellow)
-                                }
-                            }
-                            Text("\(credential.discoverable ? "Passkey" : "Security key") · "
-                                + "created \(credential.created.formatted(date: .abbreviated, time: .omitted)) · "
-                                + "used \(credential.signCount)×")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                        }
-                        .swipeActions {
-                            Button("Delete", role: .destructive) { pendingDelete = credential }
-                        }
-                        .swipeActions(edge: .leading) {
-                            if credential.suggested == true {
-                                Button("Don't suggest") { store.setSuggested(id: credential.id, false) }
-                                    .tint(.gray)
-                            } else {
-                                Button("Suggest") { store.setSuggested(id: credential.id, true) }
-                                    .tint(.yellow)
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        .listStyle(.insetGrouped)
-        .navigationTitle("Keys")
-        .alert("Delete this key?", isPresented: Binding(
-            get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }
-        ), presenting: pendingDelete) { credential in
-            Button("Delete", role: .destructive) { store.delete(credential) }
-            Button("Cancel", role: .cancel) {}
-        } message: { credential in
-            Text("PhoneKey can no longer sign in to \(credential.rpId) as \(credential.accountLabel). "
-                + "This cannot be undone. Make sure you have another way to sign in.")
-        }
-    }
-}

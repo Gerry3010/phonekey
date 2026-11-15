@@ -112,6 +112,8 @@ final class SecureEnclaveKeys: CredentialKeys {
 /// Sessions call it from background tasks; the UI reads the published copy.
 final class KeychainCredentialStore: ObservableObject, CredentialStore, @unchecked Sendable {
     @Published private(set) var all: [StoredCredential] = []
+    /// The user's own names for sites (RP ID → name), only on this phone.
+    @Published private(set) var siteNames: [String: String] = [:]
 
     private let lock = NSLock()
     private var items: [StoredCredential] = []
@@ -124,6 +126,10 @@ final class KeychainCredentialStore: ObservableObject, CredentialStore, @uncheck
             items = decoded
         }
         all = items
+        if let data = try? Keychain.read("siteNames"),
+           let decoded = try? JSONDecoder().decode([String: String].self, from: data) {
+            siteNames = decoded
+        }
     }
 
     func credentials(rpId: String) -> [StoredCredential] {
@@ -160,10 +166,30 @@ final class KeychainCredentialStore: ObservableObject, CredentialStore, @uncheck
         }
     }
 
-    /// Deletes the key and the metadata. Cannot be undone.
-    func delete(_ credential: StoredCredential) {
-        keys.deleteKey(id: credential.id)
-        try? mutate { $0.removeAll { $0.id == credential.id } }
+    /// Deletes keys and their metadata. Cannot be undone. The metadata goes
+    /// first, so a failure leaves an unused key, never an entry without one.
+    func delete(_ credentials: [StoredCredential]) {
+        let ids = Set(credentials.map(\.id))
+        guard (try? mutate({ $0.removeAll { ids.contains($0.id) } })) != nil else { return }
+        for id in ids { keys.deleteKey(id: id) }
+    }
+
+    /// The user's own name for a key; nil or blank goes back to the site's name.
+    func rename(id: Data, to name: String?) {
+        let trimmed = name?.trimmingCharacters(in: .whitespacesAndNewlines)
+        try? mutate { items in
+            guard let i = items.firstIndex(where: { $0.id == id }) else { return }
+            items[i].localName = trimmed?.isEmpty == false ? trimmed : nil
+        }
+    }
+
+    /// The user's own name for a site; nil or blank removes it. Main thread.
+    func renameSite(_ rpId: String, to name: String?) {
+        let trimmed = name?.trimmingCharacters(in: .whitespacesAndNewlines)
+        var names = siteNames
+        names[rpId] = trimmed?.isEmpty == false ? trimmed : nil
+        guard let data = try? JSONEncoder().encode(names), (try? Keychain.write(data, "siteNames")) != nil else { return }
+        siteNames = names
     }
 
     private func locked<T>(_ body: () throws -> T) rethrows -> T {
