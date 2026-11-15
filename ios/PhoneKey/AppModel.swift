@@ -165,8 +165,11 @@ final class AppModel: ObservableObject {
                     // Runs on after the handler returns, so the session keeps
                     // reading (ctap.cancel) while the user decides.
                     let response = await authenticator.handle(data)
-                    try? await session.send(CTAPResponseMessage(id: id, data: response))
-                    await MainActor.run { self.ctapJob = nil }
+                    let sent = (try? await session.send(CTAPResponseMessage(id: id, data: response))) != nil
+                    await MainActor.run {
+                        self.ctapJob = nil
+                        self.fidoPrompts.requestFinished(succeeded: sent && response.first == CTAPStatus.ok.rawValue)
+                    }
                 }
                 ctapJob = (ObjectIdentifier(session), id, task)
                 return true

@@ -371,10 +371,13 @@ registered.
   `authenticatorGetNextAssertion` (`0x08`) answers `0x30`
   (`CTAP2_ERR_NOT_ALLOWED`).
 - The phone shows the site and the account and opens Touch ID at once; with
-  several discoverable candidates the user picks the account first. Cancelling
-  Touch ID works as for makeCredential. That one Touch ID also unlocks the
-  signature. Flags `UP | UV` (`0x05`); the per-credential counter goes up by
-  one.
+  several candidates for the newest one, and "Other account" lists the rest.
+  Cancelling Touch ID works as for makeCredential. That one Touch ID also
+  unlocks the signature. Flags `UP | UV` (`0x05`); the per-credential counter
+  goes up by one.
+- Once the answer has gone out, the phone shows for a moment that the
+  registration or sign-in is done, so one request is visibly over before the
+  next one starts.
 - The response contains `credential`, `authData`, `signature` (DER) and, for
   discoverable credentials, `user` (`id`, `name`, `displayName`).
 

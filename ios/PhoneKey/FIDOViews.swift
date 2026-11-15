@@ -13,7 +13,7 @@ struct FIDOPromptOverlay: View {
                     header(active)
                     content(active)
                     if let note = prompts.note {
-                        Text(note).font(.footnote).foregroundColor(.orange)
+                        Text(note).font(.footnote).foregroundColor(.orange).multilineTextAlignment(.center)
                     }
                     Text(active.deadline, style: .timer)
                         .font(.caption.monospacedDigit())
@@ -26,6 +26,22 @@ struct FIDOPromptOverlay: View {
             }
             .preferredColorScheme(.dark)
             .transition(.opacity)
+        } else if let confirmation = prompts.confirmation {
+            // The request is done: says so for a moment, then goes away.
+            ZStack {
+                Color.black.opacity(0.88).ignoresSafeArea()
+                VStack(spacing: 12) {
+                    Image(systemName: "checkmark.circle.fill").font(.system(size: 44)).foregroundColor(.green)
+                    Text(confirmation).font(.headline).multilineTextAlignment(.center)
+                }
+                .padding(28)
+                .frame(maxWidth: 360)
+                .background(RoundedRectangle(cornerRadius: 20).fill(Color(.secondarySystemBackground)))
+                .padding(20)
+            }
+            .preferredColorScheme(.dark)
+            .transition(.opacity)
+            .allowsHitTesting(false)
         }
     }
 
@@ -51,29 +67,24 @@ struct FIDOPromptOverlay: View {
             touchIDButtons()
 
         case let .signIn(p):
-            Text("Sign in").font(.title3.bold())
+            Text("Sign in to").font(.title3.bold())
             site(p.rpId, name: nil)
-            if let chosen = prompts.chosen {
-                Label(chosen.accountLabel, systemImage: "person.crop.circle").foregroundColor(.secondary)
+            if prompts.pickingAccount {
+                accountList(p.candidates)
+                declineButton()
+            } else if let chosen = prompts.chosen {
+                VStack(spacing: 2) {
+                    Label("as \(chosen.accountLabel)", systemImage: "person.crop.circle")
+                        .foregroundColor(.secondary)
+                    if p.candidates.count > 1 {
+                        Text("\(p.candidates.count) accounts for this site").font(.caption).foregroundColor(.secondary)
+                    }
+                }
                 touchIDButtons()
                 if p.candidates.count > 1 {
                     Button("Other account", action: prompts.chooseAnotherAccount)
                         .disabled(prompts.authenticating)
                 }
-            } else {
-                VStack(spacing: 8) {
-                    ForEach(p.candidates) { credential in
-                        Button {
-                            prompts.choose(credential)
-                        } label: {
-                            Label(credential.accountLabel, systemImage: "person.crop.circle")
-                                .frame(maxWidth: .infinity)
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.large)
-                    }
-                }
-                declineButton()
             }
 
         case let .excluded(rpId):
@@ -89,6 +100,53 @@ struct FIDOPromptOverlay: View {
                 .multilineTextAlignment(.center)
                 .foregroundColor(.secondary)
             buttons(primary: "Use PhoneKey", action: prompts.acknowledge)
+        }
+    }
+
+    /// "Which account?": one row per stored account, newest first. Long
+    /// lists scroll so the card keeps Decline and the timer on screen.
+    private func accountList(_ candidates: [StoredCredential]) -> some View {
+        let sorted = candidates.sorted { $0.created > $1.created }
+        return VStack(alignment: .leading, spacing: 8) {
+            Text("Which account?").font(.headline)
+            Group {
+                if sorted.count > 4 {
+                    ScrollView { accountRows(sorted) }.frame(height: 260)
+                } else {
+                    accountRows(sorted)
+                }
+            }
+            .background(RoundedRectangle(cornerRadius: 12).fill(Color(.tertiarySystemBackground)))
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+        }
+    }
+
+    private func accountRows(_ sorted: [StoredCredential]) -> some View {
+        VStack(spacing: 0) {
+            ForEach(sorted) { credential in
+                Button {
+                    prompts.choose(credential)
+                } label: {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(credential.accountLabel).foregroundColor(.primary)
+                            Text("created \(credential.created.formatted(date: .abbreviated, time: .shortened))"
+                                + " · used \(credential.signCount)×")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                        Spacer()
+                        Image(systemName: "chevron.right").font(.caption).foregroundColor(.secondary)
+                    }
+                    .padding(.vertical, 10)
+                    .padding(.horizontal, 12)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                if credential.id != sorted.last?.id {
+                    Divider().padding(.leading, 12)
+                }
+            }
         }
     }
 

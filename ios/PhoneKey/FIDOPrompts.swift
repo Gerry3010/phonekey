@@ -1,13 +1,15 @@
 @preconcurrency import LocalAuthentication
+import os
 import PhoneKeyCore
 import SwiftUI
 
 /// The authenticator's screen: one prompt at a time, timing out after 60 s.
 ///
-/// Registrations and sign-ins open Touch ID right away. Cancelling Touch ID
+/// Registrations and sign-ins open Touch ID right away; with several accounts
+/// for the newest one, and "Other account" lists the rest. Cancelling Touch ID
 /// does not decline: the card stays with the details and offers Touch ID again.
-/// Only the Decline button declines. With several accounts the user picks one
-/// first, then Touch ID opens.
+/// Only the Decline button declines. After the computer got its answer, a short
+/// confirmation shows that the request is done.
 @MainActor
 final class FIDOPrompts: ObservableObject {
     enum Kind {
@@ -31,8 +33,12 @@ final class FIDOPrompts: ObservableObject {
     @Published private(set) var note: String?
     /// The Touch ID sheet is up.
     @Published private(set) var authenticating = false
-    /// The sign-in account Touch ID is for: picked by the user, or the only one.
+    /// The sign-in account Touch ID is for: the newest one, or the one picked.
     @Published private(set) var chosen: StoredCredential?
+    /// The sign-in card lists all accounts ("Other account").
+    @Published private(set) var pickingAccount = false
+    /// "Signed in as …" for a moment after a request succeeded.
+    @Published private(set) var confirmation: String?
     /// The computer the current CTAP request came from.
     var hostName: String?
     /// Told when a prompt appears (true) or goes away (false).
@@ -45,22 +51,47 @@ final class FIDOPrompts: ObservableObject {
     private var cancelledBeforeShown: Set<Int> = []
     private var timeoutTask: Task<Void, Never>?
     private var authContext: LAContext?
+    private let log = Logger(subsystem: "net.geraldhofbauer.phonekey", category: "fido")
+    /// What the user approved, shown as the confirmation once the request
+    /// really succeeded.
+    private var approvedSummary: String?
+    private var confirmationTask: Task<Void, Never>?
+    private var confirmationShown = Date.distantPast
+    /// The confirmation stays at least this long before the next prompt
+    /// replaces it, so one request is visibly done before the next begins.
+    private static let confirmationMinimum: TimeInterval = 1.5
 
     // MARK: User actions
 
     /// Opens Touch ID for the current registration or chosen sign-in account.
     func authenticate() {
+        authenticate(forSigning: true)
+    }
+
+    /// `forSigning`: for a sign-in, evaluate the credential keys' access
+    /// control for signing, which the Secure Enclave then takes for the
+    /// signature itself (one Touch ID). A plain policy check would make the
+    /// signature ask again. The Simulator has no Secure Enclave and its plain
+    /// keychain keys take the policy check.
+    private func authenticate(forSigning: Bool) {
         guard let active, !authenticating else { return }
         let reason: String
+        var isSignIn = false
         switch active.kind {
         case let .registration(prompt):
             reason = prompt.passkey ? "Create a passkey for \(prompt.rpId)" : "Register this key with \(prompt.rpId)"
         case let .signIn(prompt):
             guard let chosen else { return }
             reason = "Sign in to \(prompt.rpId) as \(chosen.accountLabel)"
+            isSignIn = true
         case .excluded, .selection:
             return
         }
+        #if targetEnvironment(simulator)
+        let access: SecAccessControl? = nil
+        #else
+        let access = forSigning && isSignIn ? try? SecureEnclaveKeys.accessControl() : nil
+        #endif
 
         let context = LAContext()
         context.localizedCancelTitle = "Details"
@@ -69,40 +100,73 @@ final class FIDOPrompts: ObservableObject {
         authenticating = true
         note = nil
         let promptId = active.id
+        let usedAccessControl = access != nil
         let reply: @Sendable (Bool, Error?) -> Void = { ok, error in
             Task { @MainActor in
                 guard self.authContext === context, self.active?.id == promptId else { return }
                 self.authenticating = false
                 if ok {
                     self.approve(with: context)
+                    return
+                }
+                self.authContext = nil
+                let laError = error as? LAError
+                self.log.notice("Touch ID ended without success, code \(laError?.code.rawValue ?? -1, privacy: .public)")
+                if usedAccessControl, !Self.isUserOutcome(laError) {
+                    // The key rule could not be evaluated: fall back to the plain
+                    // check. The signature then asks once more, as before.
+                    self.authenticate(forSigning: false)
                 } else {
-                    self.authContext = nil
-                    self.touchIDDidNotSucceed(error as? LAError)
+                    self.touchIDDidNotSucceed(laError)
                 }
             }
         }
-        if case .signIn = active.kind, let access = try? SecureEnclaveKeys.accessControl() {
-            // The Secure Enclave only takes a context that was evaluated for
-            // signing with a key under this rule; a plain policy check makes
-            // the signature ask again.
+        if let access {
             context.evaluateAccessControl(access, operation: .useKeySign, localizedReason: reason, reply: reply)
         } else {
             context.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, localizedReason: reason, reply: reply)
         }
     }
 
-    /// Sign-in with several accounts: picks one and opens Touch ID.
+    /// Outcomes the user caused or must deal with, as opposed to Touch ID not
+    /// being able to evaluate the request at all.
+    private static func isUserOutcome(_ error: LAError?) -> Bool {
+        switch error?.code {
+        case .userCancel, .systemCancel, .appCancel, .userFallback, .authenticationFailed,
+             .biometryLockout, .biometryNotEnrolled, .biometryNotAvailable:
+            return true
+        default:
+            return false
+        }
+    }
+
+    /// Sign-in with several accounts: picks one from the list and opens Touch ID.
     func choose(_ credential: StoredCredential) {
         guard case .signIn = active?.kind, !authenticating else { return }
         chosen = credential
+        pickingAccount = false
         authenticate()
     }
 
-    /// Sign-in with several accounts: back to the list.
+    /// Sign-in with several accounts: shows the list.
     func chooseAnotherAccount() {
         guard case let .signIn(prompt) = active?.kind, prompt.candidates.count > 1, !authenticating else { return }
-        chosen = nil
+        pickingAccount = true
         note = nil
+    }
+
+    /// Called once the computer has the answer to the current request.
+    func requestFinished(succeeded: Bool) {
+        defer { approvedSummary = nil }
+        guard succeeded, active == nil, let summary = approvedSummary else { return }
+        confirmation = summary
+        confirmationShown = Date()
+        confirmationTask?.cancel()
+        confirmationTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            guard !Task.isCancelled else { return }
+            self?.confirmation = nil
+        }
     }
 
     func acknowledge() {
@@ -116,9 +180,11 @@ final class FIDOPrompts: ObservableObject {
     private func approve(with context: LAContext) {
         guard let active else { return }
         switch active.kind {
-        case .registration:
+        case let .registration(prompt):
+            approvedSummary = prompt.passkey ? "Passkey created for \(prompt.rpId)" : "Key registered with \(prompt.rpId)"
             finish(.approved, nil)
-        case .signIn:
+        case let .signIn(prompt):
+            approvedSummary = "Signed in to \(prompt.rpId) as \(chosen?.accountLabel ?? "")"
             // The signature reuses this Touch ID instead of asking again.
             authContext = nil
             handoff?.put(context)
@@ -145,9 +211,14 @@ final class FIDOPrompts: ObservableObject {
     // MARK: Presenting (called from the authenticator's task)
 
     nonisolated func present(_ kind: Kind) async -> (UserDecision, StoredCredential?) {
-        let id = await MainActor.run { () -> Int in
+        let (id, wait) = await MainActor.run { () -> (Int, TimeInterval) in
             nextId += 1
-            return nextId
+            let wait = confirmation == nil ? 0 : Self.confirmationMinimum - Date().timeIntervalSince(confirmationShown)
+            return (nextId, wait)
+        }
+        if wait > 0 {
+            // Cancelled meanwhile: the handler below sees it and declines.
+            try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
         }
         return await withTaskCancellationHandler {
             await withCheckedContinuation { continuation in
@@ -175,9 +246,13 @@ final class FIDOPrompts: ObservableObject {
         self.continuation = continuation
         note = nil
         authenticating = false
+        pickingAccount = false
+        approvedSummary = nil
+        confirmationTask?.cancel()
+        confirmation = nil
         chosen = nil
-        if case let .signIn(prompt) = kind, prompt.candidates.count == 1 {
-            chosen = prompt.candidates.first
+        if case let .signIn(prompt) = kind {
+            chosen = prompt.candidates.max { $0.created < $1.created }
         }
         active = Active(id: id, kind: kind, hostName: hostName, deadline: Date().addingTimeInterval(Self.timeout))
         onActiveChange?(true)
@@ -205,6 +280,7 @@ final class FIDOPrompts: ObservableObject {
         authenticating = false
         note = nil
         chosen = nil
+        pickingAccount = false
         active = nil
         onActiveChange?(false)
         continuation?.resume(returning: (decision, credential))
