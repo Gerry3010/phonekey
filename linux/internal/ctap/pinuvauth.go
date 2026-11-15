@@ -8,14 +8,12 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/ecdh"
+	"crypto/hkdf"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"errors"
 	"fmt"
-	"io"
-
-	"golang.org/x/crypto/hkdf"
 )
 
 // CmdClientPIN is authenticatorClientPIN.
@@ -82,8 +80,8 @@ func (p PinUvAuthProtocol) kdf(z []byte) []byte {
 		return sum[:]
 	}
 	derive := func(info string) []byte {
-		out := make([]byte, 32)
-		io.ReadFull(hkdf.New(sha256.New, z, make([]byte, 32), []byte(info)), out)
+		// Cannot fail: 32 bytes are far below HKDF-SHA-256's limit.
+		out, _ := hkdf.Key(sha256.New, z, make([]byte, 32), info, 32)
 		return out
 	}
 	return append(derive("CTAP2 HMAC key"), derive("CTAP2 AES key")...)
