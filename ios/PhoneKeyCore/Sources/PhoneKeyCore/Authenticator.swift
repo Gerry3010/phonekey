@@ -410,8 +410,11 @@ public final class Authenticator {
     private func getAssertion(_ p: CBOR, session: CTAPSession) async throws -> CBOR {
         let rpId = try required(p[1]?.text)
         let clientDataHash = try required(p[2]?.bytes)
+        let silent = p[5]?["up"]?.bool == false
         var token: CTAPSession.TokenUse?
-        defer { if token != nil { session.consumeSigningPermissions() } }
+        // A silent assertion leaves the token's permissions (CTAP 2.1 clears
+        // them only once user presence was collected).
+        defer { if token != nil, !silent { session.consumeSigningPermissions() } }
         if let pinAuth = p[6] {
             guard let param = pinAuth.bytes else { throw CTAPStatus.invalidParameter }
             if param.isEmpty {
@@ -420,7 +423,8 @@ public final class Authenticator {
                 throw CTAPStatus.pinNotSet
             }
             token = try session.useToken(param: param, protocolNumber: p[7]?.int, message: clientDataHash,
-                                         permission: TokenPrompt.getAssertion, scope: .rpId(rpId), now: now())
+                                         permission: TokenPrompt.getAssertion, scope: .rpId(rpId),
+                                         silent: silent, now: now())
         }
 
         let allowList = (p[3]?.array ?? []).compactMap { $0["id"]?.bytes }
@@ -432,19 +436,27 @@ public final class Authenticator {
         }
         guard !candidates.isEmpty else { throw CTAPStatus.noCredentials }
         // A silent check (up = false) for existing credentials, as OpenSSH does
-        // before enrolling a resident key, is answered above. A silent
-        // signature is impossible: the key needs Touch ID.
-        if p[5]?["up"]?.bool == false { throw CTAPStatus.unsupportedOption }
+        // before enrolling a resident key, is answered above. Without a
+        // token's Touch ID a silent signature is impossible: the key needs it.
+        if silent, token?.authorization == nil { throw CTAPStatus.unsupportedOption }
         // Checked before anything is shown, so a bad request never prompts.
         let hmacRequest = try p[4]?["hmac-secret"].map { try HmacSecretRequest($0, session: session) }
 
-        var signIn = SignInPrompt(rpId: rpId, candidates: candidates)
-        signIn.verified = token != nil
-        let (decision, chosen) = await ui.chooseCredential(signIn)
-        try check(decision)
-        try Task.checkCancellation()
-        guard let credential = chosen, candidates.contains(where: { $0.id == credential.id }) else {
-            throw CTAPStatus.operationDenied
+        let credential: StoredCredential
+        if silent {
+            // Signed with the token's Touch ID, no card (Firefox checks this
+            // way before signing in; §10, "Silent assertions").
+            credential = candidates[0]
+        } else {
+            var signIn = SignInPrompt(rpId: rpId, candidates: candidates)
+            signIn.verified = token != nil
+            let (decision, chosen) = await ui.chooseCredential(signIn)
+            try check(decision)
+            try Task.checkCancellation()
+            guard let chosen, candidates.contains(where: { $0.id == chosen.id }) else {
+                throw CTAPStatus.operationDenied
+            }
+            credential = chosen
         }
 
         // The same Touch ID decrypts the secret and then signs (§10).
@@ -466,7 +478,7 @@ public final class Authenticator {
 
         let counter = try store.incrementCounter(id: credential.id)
         var authData = Self.rpIdHash(rpId)
-        authData.append(Flags.up | Flags.uv | (extensions.isEmpty ? 0 : Flags.ed))
+        authData.append((silent ? 0 : Flags.up) | Flags.uv | (extensions.isEmpty ? 0 : Flags.ed))
         authData += Self.counterBytes(counter)
         if !extensions.isEmpty {
             authData += CBOR.map(extensions).encoded
