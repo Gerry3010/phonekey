@@ -44,10 +44,13 @@ public struct StoredCredential: Codable, Equatable, Identifiable {
     public var lastUsed: Date?
     /// The user wants this account suggested first on its site (app UI).
     public var suggested: Bool?
+    /// The user's own name for the account, only on the phone (app UI).
+    public var localName: String?
 
     public init(id: Data, rpId: String, rpName: String?, userId: Data, userName: String?,
                 userDisplayName: String?, discoverable: Bool, created: Date, signCount: UInt32,
-                credProtect: Int? = nil, lastUsed: Date? = nil, suggested: Bool? = nil) {
+                credProtect: Int? = nil, lastUsed: Date? = nil, suggested: Bool? = nil,
+                localName: String? = nil) {
         self.id = id
         self.rpId = rpId
         self.rpName = rpName
@@ -60,11 +63,12 @@ public struct StoredCredential: Codable, Equatable, Identifiable {
         self.credProtect = credProtect
         self.lastUsed = lastUsed
         self.suggested = suggested
+        self.localName = localName
     }
 
     /// The best label for the account.
     public var accountLabel: String {
-        userName ?? userDisplayName ?? "Unnamed account"
+        localName ?? userName ?? userDisplayName ?? "Unnamed account"
     }
 }
 
@@ -270,7 +274,8 @@ public final class Authenticator {
             id: credentialId, rpId: rpId, rpName: rp["name"]?.text, userId: userId,
             userName: user["name"]?.text, userDisplayName: user["displayName"]?.text,
             discoverable: passkey, created: Date(), signCount: 0, credProtect: credProtect,
-            suggested: replaced.contains { $0.suggested == true } ? true : nil),
+            suggested: replaced.contains { $0.suggested == true } ? true : nil,
+            localName: replaced.lazy.compactMap(\.localName).first),
             replacing: replaced.map(\.id))
         // Only after the metadata is gone: a failure leaves an unused key, never
         // an entry without its key.
