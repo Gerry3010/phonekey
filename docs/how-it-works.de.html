@@ -169,14 +169,14 @@ footer { margin-top: 2rem; padding-top: 1rem; border-top: 1px solid var(--line);
 
 <main>
 <header class="top">
-  <p class="eyebrow">Stand 14. November 2026</p>
+  <p class="eyebrow">Stand 15. November 2026</p>
   <h1>PhoneKey</h1>
-  <p class="lead">Ein altes iPhone 7 steht am Schreibtisch, hängt per USB am Linux-Rechner und dient dort als Sicherheitsschlüssel für Websites und ssh. Jede Registrierung und jede Anmeldung bestätigst du am iPhone mit Touch ID. Kamera und Mikrofon kommen später dazu.</p>
+  <p class="lead">Ein altes iPhone 7 steht am Schreibtisch, hängt per USB am Linux-Rechner und dient dort als Sicherheitsschlüssel für Websites, ssh und verschlüsselte Laufwerke. Jede Registrierung, jede Anmeldung und jedes Entsperren bestätigst du am iPhone mit Touch ID. Kamera und Mikrofon kommen später dazu.</p>
   <ul class="phases" aria-label="Stand der Phasen">
     <li class="pill"><span class="dot ok"></span>Verbindung und Pairing</li>
-    <li class="pill"><span class="dot ok"></span>Sicherheitsschlüssel, ssh</li>
-    <li class="pill"><span class="dot warn"></span>Browser-Test nach Fix</li>
-    <li class="pill"><span class="dot"></span>LUKS, PIN, Schlüsselliste</li>
+    <li class="pill"><span class="dot ok"></span>Sicherheitsschlüssel, ssh, Browser</li>
+    <li class="pill"><span class="dot ok"></span>LUKS</li>
+    <li class="pill"><span class="dot warn"></span>Schlüsselliste, PIN</li>
     <li class="pill"><span class="dot"></span>Kamera und Mikrofon</li>
   </ul>
 </header>
@@ -193,6 +193,7 @@ footer { margin-top: 2rem; padding-top: 1rem; border-top: 1px solid var(--line);
     <li><a href="#registrieren">Registrieren</a></li>
     <li><a href="#anmelden">Anmelden</a></li>
     <li><a href="#chrome">Chrome-Fehler</a></li>
+    <li><a href="#luks">LUKS</a></li>
     <li><a href="#einrichtung">Einrichtung</a></li>
     <li><a href="#schluessel">Wo die Schlüssel liegen</a></li>
     <li><a href="#grenzen">Grenzen</a></li>
@@ -535,7 +536,26 @@ footer { margin-top: 2rem; padding-top: 1rem; border-top: 1px solid var(--line);
       <figcaption>Chrome wertet jede Antwort außer „Erfolg“ auf eine stille Probe als „Schlüssel kennt diese ID nicht“. Mit den Feldern 7 und 8 entfällt die Probe.</figcaption>
     </figure>
     <p>Gibt ein Schlüssel in <code>getInfo</code> keine maximale ID-Länge an, schickt Chrome die erlaubten IDs einzeln und jede zuerst als stille Probe. Auf die Probe mit der richtigen ID kann das iPhone nicht signieren, also antwortet es <code>UNSUPPORTED_OPTION</code>, und Chrome hält den Schlüssel für fremd. Bei webauthn.io mit dem Benutzernamen „Test“ hatten viele Leute Schlüssel registriert, deshalb stand mehr als eine ID in der Liste.</p>
-    <p>Seit PR #8 meldet das iPhone, dass es 16 IDs pro Anfrage annimmt und jede ID 32 Byte lang ist. Chrome filtert dann fremde, längere IDs heraus und schickt den Rest in einer normalen Anfrage. Erst bei mehr als 16 passenden IDs probt Chrome wieder einzeln. Der Fix muss noch aufs iPhone, danach wird der Browser-Test wiederholt.</p>
+    <p>Seit PR #8 meldet das iPhone, dass es 16 IDs pro Anfrage annimmt und jede ID 32 Byte lang ist. Chrome filtert dann fremde, längere IDs heraus und schickt den Rest in einer normalen Anfrage. Erst bei mehr als 16 passenden IDs probt Chrome wieder einzeln. Am 15. November lief der Browser-Test noch einmal. Anmelden klappt in Chrome und Firefox, auch mit „Test“ und sechs fremden Passkeys im selben Konto.</p>
+  </div>
+
+  <div class="sub" id="luks">
+    <h3>LUKS-Laufwerke entsperren</h3>
+    <p>Seit Phase 3a kann das iPhone <code>hmac-secret</code>. Damit trägt <code>systemd-cryptenroll</code> es als FIDO2-Schlüssel in ein LUKS2-Laufwerk ein. Zum Öffnen braucht es dann das iPhone mit offener App und ein Touch ID.</p>
+    <ol class="steps">
+      <li><div>Beim Eintragen legt systemd auf dem iPhone einen Schlüssel für <code>io.systemd.cryptsetup</code> an und fragt gleich danach ein Geheimnis ab, das sind zwei Touch-ID-Abfragen. Aus dem Ergebnis wird der Schlüssel eines neuen Keyslots. Im LUKS-Header stehen nur die Credential-ID und ein Salt.</div></li>
+      <li><div>Beim Öffnen schickt systemd den Salt verschlüsselt mit (über das PIN/UV-Protokoll). Die App zeigt die Anfrage, und nach Touch ID entschlüsselt der Secure Enclave das gespeicherte Geheimnis dieses Schlüssels.</div></li>
+      <li><div>Die App rechnet HMAC-SHA-256 aus Geheimnis und Salt, verschlüsselt das Ergebnis für den Rechner und signiert die Antwort mit demselben Touch ID. Das Geheimnis liegt dafür kurz im Klartext im Speicher der App, weil der Secure Enclave kein HMAC rechnet.</div></li>
+      <li><div>Mit dem Ergebnis öffnet systemd den Keyslot. Derselbe Salt ergibt immer dasselbe Ergebnis, deshalb klappt das bei jedem Öffnen.</div></li>
+    </ol>
+<pre><span class="c"># eintragen, die Passphrase bleibt als zweiter Keyslot</span>
+sudo systemd-cryptenroll --fido2-device=auto \
+  --fido2-with-client-pin=no --fido2-with-user-verification=yes /dev/sdXN
+<span class="c"># öffnen</span>
+sudo systemd-cryptsetup attach daten /dev/sdXN - fido2-device=auto</pre>
+    <div class="note warn">
+      <p>Das geht nur für Laufwerke, die du nach dem Anmelden öffnest, also Datenpartitionen und externe Platten. Für das Root-Laufwerk beim Booten müssten Daemon und usbmuxd ins initramfs. Behalte die Passphrase, denn das Geheimnis gibt es nur auf diesem iPhone. Löschst du in der App den Schlüssel für <code>io.systemd.cryptsetup</code>, ist der FIDO2-Keyslot nutzlos.</p>
+    </div>
   </div>
 
   <div class="sub">
@@ -545,10 +565,11 @@ footer { margin-top: 2rem; padding-top: 1rem; border-top: 1px solid var(--line);
         <thead><tr><th>Einsatz</th><th>Stand</th></tr></thead>
         <tbody>
           <tr><td>ssh</td><td><code>ssh-keygen -t ecdsa-sk</code>, auch mit <code>-O resident -O verify-required</code>. Fragt OpenSSH nach einer PIN, drückst du Enter, die Verifikation macht Touch ID. Auf echtem Linux getestet.</td></tr>
-          <tr><td>Websites</td><td>Chrome und Firefox, als Sicherheitsschlüssel oder Passkey. Registrieren geht, Anmelden nach dem Fix aus PR #8 erneut testen.</td></tr>
+          <tr><td>Websites</td><td>Chrome und Firefox, als Sicherheitsschlüssel oder Passkey, mit und ohne Benutzernamen. Auf echtem Linux getestet.</td></tr>
+          <tr><td>LUKS</td><td><code>systemd-cryptenroll</code>, <code>cryptsetup open --token-only</code> und <code>systemd-cryptsetup attach</code> mit einer LUKS2-Testdatei auf echtem Linux getestet, je ein Touch ID pro Öffnen.</td></tr>
           <tr><td>libfido2</td><td><code>fido2-token -L</code> und <code>-I</code> sehen den Schlüssel korrekt.</td></tr>
           <tr><td>pam-u2f</td><td>Sollte gehen (sudo oder Login per Touch ID), noch nicht getestet.</td></tr>
-          <tr><td>Selbsttest</td><td><code>phonekey fido selftest</code> legt einen Test-Passkey für <code>phonekey.test</code> an, meldet sich zweimal an und prüft alles selbst.</td></tr>
+          <tr><td>Selbsttest</td><td><code>phonekey fido selftest</code> legt einen Test-Passkey für <code>phonekey.test</code> an, meldet sich an und prüft alles selbst. Kann das iPhone <code>hmac-secret</code>, prüft er es mit beiden PIN/UV-Protokollen: Derselbe Salt muss dasselbe Geheimnis ergeben.</td></tr>
         </tbody>
       </table>
     </div>
@@ -578,7 +599,7 @@ systemctl --user enable --now phonekey-fido</pre>
 fido2-token -L
 <span class="c">/dev/hidraw11: vendor=0x1209, product=0x0001 ( PhoneKey)</span>
 phonekey fido selftest
-<span class="c">PASS. The test passkey for phonekey.test stays on the phone …</span></pre>
+<span class="c">PASS. The test passkey "Self-test from …" stays on the phone …</span></pre>
 </section>
 
 <section id="schluessel">
@@ -589,6 +610,7 @@ phonekey fido selftest
       <tbody>
         <tr><td>iPhone</td><td>FIDO-Schlüssel (P-256)</td><td>Secure Enclave, nur nach Touch ID nutzbar, verlässt den Chip nie</td></tr>
         <tr><td>iPhone</td><td>Liste der Credentials (Website, Konto, ID)</td><td>Schlüsselbund, „nur dieses Gerät“: kein Backup, keine iCloud</td></tr>
+        <tr><td>iPhone</td><td><code>hmac-secret</code> je Credential (32 Byte, für LUKS)</td><td>bei der Liste, verschlüsselt mit dem Secure-Enclave-Schlüssel des Credentials, nur nach Touch ID lesbar</td></tr>
         <tr><td>iPhone</td><td>Sitzungsschlüssel (X25519), gepairte Rechner</td><td>Schlüsselbund, „nur dieses Gerät“</td></tr>
         <tr><td>Linux</td><td>Rechner-Schlüssel (X25519)</td><td><code>~/.config/phonekey/host.key</code>, Rechte 0600</td></tr>
         <tr><td>Linux</td><td>gepairte iPhones (öffentliche Schlüssel)</td><td><code>~/.config/phonekey/phones.json</code></td></tr>
@@ -616,11 +638,12 @@ phonekey fido selftest
   <ol class="road">
     <li><span class="mark ok"></span><div class="body"><span class="state">Phase 0 · fertig</span><h3>Projektstart</h3><p>Repo, Xcode-Projekt, Dokumentation.</p></div></li>
     <li><span class="mark ok"></span><div class="body"><span class="state">Phase 1 · fertig</span><h3>Verbindung und Desk-Modus</h3><p>usbmuxd-Tunnel, verschlüsselte Sitzung, Pairing per QR-Code, Status, Fotos, Desk-Modus. Auf dem iPhone 7 mit iOS 15.8.2 geprüft.</p></div></li>
-    <li><span class="mark warn"></span><div class="body"><span class="state">Phase 2 · fertig, Nacharbeit offen</span><h3>Sicherheitsschlüssel und Passkeys</h3><p>Auf echtem Linux mit Selbsttest, libfido2 und OpenSSH geprüft. Chrome-Fix (PR #8) und die neue Touch-ID-Abfrage (PR #9 und #12) sind auf dem iPhone. Offen ist der neue Test in Chrome und Firefox.</p></div></li>
-    <li><span class="mark"></span><div class="body"><span class="state">Phase 3 · Spezifikation in PR #6</span><h3>Mehr FIDO</h3>
+    <li><span class="mark ok"></span><div class="body"><span class="state">Phase 2 · fertig</span><h3>Sicherheitsschlüssel und Passkeys</h3><p>Auf echtem Linux mit Selbsttest, libfido2, OpenSSH, Chrome und Firefox geprüft. Eine Anmeldung braucht ein Touch ID, Abbrechen lehnt nicht ab, und in der App verwaltest du die Schlüssel.</p></div></li>
+    <li><span class="mark warn"></span><div class="body"><span class="state">Phase 3 · 3a fertig, 3b in Arbeit</span><h3>Mehr FIDO</h3>
       <ul class="plain">
-        <li>3a, hmac-secret: LUKS-Laufwerke mit <code>systemd-cryptenroll</code> entsperren, solange du angemeldet bist (Datenpartitionen, externe Platten, nicht das Root-Laufwerk beim Booten). Das Geheimnis pro Schlüssel liegt verschlüsselt mit dessen Secure-Enclave-Schlüssel und ist nur zum Rechnen kurz im Speicher der App.</li>
-        <li>3b, PIN mit Touch ID: OpenSSH (<code>ssh-keygen -K</code>, <code>ssh-add -K</code>) und die Schlüsselverwaltung in Chrome verlangen fest eine PIN. Die PIN liegt nur als Hash im Schlüsselbund des iPhones, jede Nutzung fragt zusätzlich Touch ID ab, und eine vergessene PIN setzt du in der App mit Touch ID zurück. Die Schlüssel bleiben dabei erhalten. Beim normalen Anmelden bleibt es bei Touch ID.</li>
+        <li>3a, hmac-secret (fertig): LUKS-Laufwerke mit <code>systemd-cryptenroll</code> entsperren, solange du angemeldet bist (Datenpartitionen, externe Platten, nicht das Root-Laufwerk beim Booten). Am 15. November auf echtem Linux getestet.</li>
+        <li>3b, Token per Touch ID und Schlüsselliste: Chrome holt sich vor jeder Anmeldung ein Token per Touch ID, und <code>fido2-token</code> listet und löscht Passkeys. Ein Touch ID gibt genau eine Anmeldung frei.</li>
+        <li>3c, PIN mit Touch ID: OpenSSH (<code>ssh-keygen -K</code>, <code>ssh-add -K</code>) und die Schlüsselverwaltung in Chrome verlangen fest eine PIN. Die PIN liegt nur als Hash auf dem iPhone, verschlüsselt mit einem eigenen Secure-Enclave-Schlüssel. Jede Nutzung fragt zusätzlich Touch ID ab, und eine vergessene PIN setzt du in der App mit Touch ID zurück, die Schlüssel bleiben dabei erhalten. Beim normalen Anmelden bleibt es bei Touch ID.</li>
         <li>U2F (CTAP1): nur bei Bedarf. Aktuelle Browser, OpenSSH und pam-u2f sprechen CTAP2.</li>
       </ul></div></li>
     <li><span class="mark"></span><div class="body"><span class="state">Phase 4 · geplant</span><h3>Kamera und Mikrofon</h3><p>Die iPhone-Kamera als Webcam über <code>v4l2loopback</code>, das Mikrofon als PipeWire-Quelle. Zuerst kommt der Protokollteil für Streams.</p></div></li>
