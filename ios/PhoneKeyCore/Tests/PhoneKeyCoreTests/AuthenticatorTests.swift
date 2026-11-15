@@ -18,6 +18,12 @@ final class MemoryStore: CredentialStore {
         items[i].signCount += 1
         return items[i].signCount
     }
+    func allCredentials() -> [StoredCredential] { items }
+    func update(_ credential: StoredCredential) throws {
+        guard let i = items.firstIndex(where: { $0.id == credential.id }) else { throw CTAPStatus.noCredentials }
+        items[i] = credential
+    }
+    func delete(id: Data) throws { items.removeAll { $0.id == id } }
 }
 
 final class SoftwareKeys: CredentialKeys {
@@ -30,7 +36,11 @@ final class SoftwareKeys: CredentialKeys {
         return key.publicKey.x963Representation
     }
 
-    func sign(id: Data, data: Data, reason: String) async throws -> Data {
+    /// The authorization the last sign/decrypt got (a token's Touch ID).
+    var lastAuthorization: AnyObject?
+
+    func sign(id: Data, data: Data, reason: String, authorization: AnyObject?) async throws -> Data {
+        lastAuthorization = authorization
         if denySigning { throw CTAPStatus.operationDenied }
         guard let key = keys[id] else { throw CTAPStatus.noCredentials }
         return try key.signature(for: data).derRepresentation
@@ -51,11 +61,16 @@ final class SoftwareKeys: CredentialKeys {
         return handle
     }
 
-    func decrypt(id: Data, ciphertext: Data, reason: String) async throws -> Data {
+    func decrypt(id: Data, ciphertext: Data, reason: String, authorization: AnyObject?) async throws -> Data {
         decryptCalls += 1
         if denyDecrypt { throw CTAPStatus.operationDenied }
         guard keys[id] != nil, let plain = sealed[ciphertext] else { throw CTAPStatus.noCredentials }
         return plain
+    }
+
+    func publicKey(id: Data) throws -> Data {
+        guard let key = keys[id] else { throw CTAPStatus.noCredentials }
+        return key.publicKey.x963Representation
     }
 
     func deleteKey(id: Data) { keys[id] = nil }
@@ -85,6 +100,23 @@ final class ScriptedUI: AuthenticatorUI {
 
     func acknowledgeExcluded(rpId: String) async -> UserDecision { decision }
     func confirmSelection() async -> UserDecision { decision }
+
+    /// Stands in for the LAContext of the token's Touch ID.
+    final class Authorization {}
+    var tokenDecision: TokenDecision = .approved(authorization: Authorization())
+    var tokenPrompts: [TokenPrompt] = []
+    var deletions: [StoredCredential] = []
+    var touchIDLocked = false
+
+    func authorizeToken(_ prompt: TokenPrompt) async -> TokenDecision {
+        tokenPrompts.append(prompt)
+        return tokenDecision
+    }
+
+    func confirmDeletion(_ credential: StoredCredential) async -> UserDecision {
+        deletions.append(credential)
+        return decision
+    }
 }
 
 // MARK: Tests
@@ -101,9 +133,12 @@ final class AuthenticatorTests: XCTestCase {
         store = MemoryStore()
         keys = SoftwareKeys()
         ui = ScriptedUI()
-        authenticator = Authenticator(store: store, keys: keys, ui: ui)
+        authenticator = Authenticator(store: store, keys: keys, ui: ui, now: { [unowned self] in self.clock })
         session = CTAPSession()
     }
+
+    /// The authenticator's clock, for token lifetimes.
+    private var clock = Date(timeIntervalSince1970: 1_000_000)
 
     private func call(_ command: UInt8, _ params: CBOR?) async -> (UInt8, CBOR?) {
         let response = await authenticator.handle(Data([command]) + (params?.encoded ?? Data()), session: session)
@@ -156,7 +191,7 @@ final class AuthenticatorTests: XCTestCase {
     func testGetInfo() async throws {
         let (status, info) = await call(0x04, nil)
         XCTAssertEqual(status, 0)
-        XCTAssertEqual(info?[1], .array([.text("FIDO_2_0")]))
+        XCTAssertEqual(info?[1], .array([.text("FIDO_2_0"), .text("FIDO_2_1")]))
         XCTAssertEqual(info?[3]?.bytes, Authenticator.aaguid)
         XCTAssertEqual(info?[4]?["rk"], .bool(true))
         XCTAssertEqual(info?[4]?["uv"], .bool(true))
@@ -373,12 +408,17 @@ final class AuthenticatorTests: XCTestCase {
     }
     // MARK: Phase 3a: PIN/UV auth protocols and hmac-secret
 
-    func testGetInfoPhase3a() async {
+    func testGetInfoPhase3() async {
         let (_, info) = await call(0x04, nil)
-        XCTAssertEqual(info?[1], .array([.text("FIDO_2_0")]), "FIDO_2_1 comes with 3b")
+        XCTAssertEqual(info?[1], .array([.text("FIDO_2_0"), .text("FIDO_2_1")]))
         XCTAssertEqual(info?[6], .array([.int(2), .int(1)]))
-        XCTAssertNil(info?[4]?["clientPin"])
-        XCTAssertNil(info?[4]?["pinUvAuthToken"])
+        XCTAssertNil(info?[4]?["clientPin"], "no PIN before 3c")
+        XCTAssertEqual(info?[4]?["pinUvAuthToken"], .bool(true))
+        XCTAssertEqual(info?[4]?["credMgmt"], .bool(true))
+        XCTAssertNil(info?[4]?["alwaysUv"])
+        XCTAssertNil(info?[4]?["makeCredUvNotRqd"])
+        XCTAssertEqual(info?[17]?.int, 1)
+        XCTAssertEqual(info?[18]?.int, 2)
     }
 
     func testGetKeyAgreementPerSession() async throws {
@@ -403,7 +443,7 @@ final class AuthenticatorTests: XCTestCase {
         XCTAssertEqual(status, CTAPStatus.invalidParameter.rawValue)
         (status, _) = await call(0x06, .map([.int(1): .int(2)]))
         XCTAssertEqual(status, CTAPStatus.missingParameter.rawValue)
-        for subCommand in [0x01, 0x03, 0x04, 0x05, 0x06, 0x07, 0x09] {
+        for subCommand in [0x01, 0x03, 0x04, 0x05, 0x09] {
             (status, _) = await call(0x06, .map([.int(1): .int(1), .int(2): .int(subCommand)]))
             XCTAssertEqual(status, CTAPStatus.invalidSubcommand.rawValue, "subCommand \(subCommand)")
         }
@@ -533,6 +573,288 @@ final class AuthenticatorTests: XCTestCase {
         XCTAssertEqual(authData.count, 37, "no extension output")
         XCTAssertEqual(authData[authData.startIndex + 32], 0x05)
         XCTAssertEqual(keys.decryptCalls, 0)
+    }
+
+    // MARK: Phase 3b: pinUvAuthToken via Touch ID, selection, credential management
+
+    /// What a platform does for a token: key agreement, then
+    /// getPinUvAuthTokenUsingUvWithPermissions, then decrypting the token.
+    private func getToken(_ proto: PinUvAuthProtocol = .two, permissions: Int,
+                          rpId: String? = "github.com") async throws -> (UInt8, Data?) {
+        let (_, ka) = await call(0x06, .map([.int(1): .int(proto.rawValue), .int(2): .int(2)]))
+        let cose = try XCTUnwrap(ka?[1])
+        let x963 = Data([0x04]) + (try XCTUnwrap(cose[-2]?.bytes)) + (try XCTUnwrap(cose[-3]?.bytes))
+        let platform = P256.KeyAgreement.PrivateKey()
+        let shared = try proto.sharedSecret(platform, with: try P256.KeyAgreement.PublicKey(x963Representation: x963))
+        let raw = [UInt8](platform.publicKey.x963Representation)
+        var params: [CBOR.Pair] = [
+            .init(.int(1), .int(proto.rawValue)), .init(.int(2), .int(6)),
+            .init(.int(3), .map([.int(1): .int(2), .int(3): .int(-25), .int(-1): .int(1),
+                                 .int(-2): .bytes(Data(raw[1...32])), .int(-3): .bytes(Data(raw[33...64]))])),
+            .init(.int(9), .int(permissions)),
+        ]
+        if let rpId { params.append(.init(.int(10), .text(rpId))) }
+        let (status, body) = await call(0x06, .map(params))
+        guard status == 0 else { return (status, nil) }
+        let token = try proto.decrypt(key: shared, try XCTUnwrap(body?[2]?.bytes))
+        XCTAssertEqual(token.count, 32)
+        return (status, token)
+    }
+
+    private func withToken(_ params: CBOR, key: Int, token: Data, proto: PinUvAuthProtocol = .two,
+                           message: Data? = nil) -> CBOR {
+        guard case var .map(pairs) = params else { return params }
+        pairs.append(.init(.int(key), .bytes(proto.authenticate(key: token, message ?? clientDataHash))))
+        pairs.append(.init(.int(key + 1), .int(proto.rawValue)))
+        return .map(pairs)
+    }
+
+    func testTokenIssuanceChecks() async throws {
+        var (status, _) = try await getToken(permissions: 0)
+        XCTAssertEqual(status, CTAPStatus.invalidParameter.rawValue)
+        (status, _) = try await getToken(permissions: 0x08) // be: not supported
+        XCTAssertEqual(status, CTAPStatus.unauthorizedPermission.rawValue)
+        (status, _) = try await getToken(permissions: 0x01, rpId: nil)
+        XCTAssertEqual(status, CTAPStatus.missingParameter.rawValue, "mc needs an RP ID")
+        ui.touchIDLocked = true
+        (status, _) = try await getToken(permissions: 0x02)
+        XCTAssertEqual(status, CTAPStatus.uvBlocked.rawValue)
+        XCTAssertTrue(ui.tokenPrompts.isEmpty, "nothing shown for these")
+        ui.touchIDLocked = false
+        for (decision, expected) in [(TokenDecision.denied, CTAPStatus.operationDenied),
+                                     (.timedOut, .userActionTimeout), (.blocked, .uvBlocked)] {
+            ui.tokenDecision = decision
+            (status, _) = try await getToken(permissions: 0x02)
+            XCTAssertEqual(status, expected.rawValue)
+        }
+        XCTAssertEqual(ui.tokenPrompts.last, TokenPrompt(permissions: 0x02, rpId: "github.com"))
+    }
+
+    func testGetUVRetries() async {
+        var (status, body) = await call(0x06, .map([.int(1): .int(2), .int(2): .int(7)]))
+        XCTAssertEqual(status, 0)
+        XCTAssertEqual(body?[5]?.int, 8)
+        ui.touchIDLocked = true
+        (status, body) = await call(0x06, .map([.int(1): .int(2), .int(2): .int(7)]))
+        XCTAssertEqual(body?[5]?.int, 0)
+    }
+
+    func testRegistrationAndSignInWithToken() async throws {
+        for proto in PinUvAuthProtocol.allCases {
+            var (_, token) = try await getToken(proto, permissions: 0x01)
+            var (status, _) = await call(0x01, withToken(makeCredentialParams(rk: true), key: 8,
+                                                         token: try XCTUnwrap(token), proto: proto))
+            XCTAssertEqual(status, 0, "\(proto)")
+            XCTAssertEqual(ui.registrations.last?.verified, true, "no second Touch ID")
+            // mc and ga serve one operation.
+            (status, _) = await call(0x01, withToken(makeCredentialParams(rk: true, user: "x"), key: 8,
+                                                     token: try XCTUnwrap(token), proto: proto))
+            XCTAssertEqual(status, CTAPStatus.pinAuthInvalid.rawValue)
+
+            (_, token) = try await getToken(proto, permissions: 0x02)
+            let authorization = try XCTUnwrap({ () -> AnyObject? in
+                if case let .approved(a) = ui.tokenDecision { return a } else { return nil }
+            }())
+            let ga = CBOR.map([.int(1): .text("github.com"), .int(2): .bytes(clientDataHash)])
+            let (signed, body) = await call(0x02, withToken(ga, key: 6, token: try XCTUnwrap(token), proto: proto))
+            XCTAssertEqual(signed, 0)
+            XCTAssertNotNil(body?[3])
+            XCTAssertEqual(ui.signIns.last?.verified, true)
+            XCTAssertTrue(keys.lastAuthorization === authorization, "the token's Touch ID signs")
+            (status, _) = await call(0x02, withToken(ga, key: 6, token: try XCTUnwrap(token), proto: proto))
+            XCTAssertEqual(status, CTAPStatus.pinAuthInvalid.rawValue, "used up")
+        }
+    }
+
+    func testTokenMisuse() async throws {
+        _ = try await register(rk: true)
+        let ga = CBOR.map([.int(1): .text("github.com"), .int(2): .bytes(clientDataHash)])
+        var (_, token) = try await getToken(permissions: 0x02, rpId: "other.example")
+        var (status, _) = await call(0x02, withToken(ga, key: 6, token: try XCTUnwrap(token)))
+        XCTAssertEqual(status, CTAPStatus.pinAuthInvalid.rawValue, "another site")
+
+        (_, token) = try await getToken(permissions: 0x01)
+        (status, _) = await call(0x02, withToken(ga, key: 6, token: try XCTUnwrap(token)))
+        XCTAssertEqual(status, CTAPStatus.pinAuthInvalid.rawValue, "mc token cannot sign in")
+
+        (_, token) = try await getToken(permissions: 0x02)
+        (status, _) = await call(0x02, withToken(ga, key: 6, token: Data(repeating: 7, count: 32)))
+        XCTAssertEqual(status, CTAPStatus.pinAuthInvalid.rawValue, "wrong token")
+        if case var .map(pairs) = withToken(ga, key: 6, token: try XCTUnwrap(token)) {
+            pairs.removeAll { $0.key == .int(7) }
+            (status, _) = await call(0x02, .map(pairs))
+            XCTAssertEqual(status, CTAPStatus.missingParameter.rawValue, "protocol missing")
+        }
+        clock += 31
+        (status, _) = await call(0x02, withToken(ga, key: 6, token: try XCTUnwrap(token)))
+        XCTAssertEqual(status, CTAPStatus.pinAuthInvalid.rawValue, "unused for 30 s: expired")
+        XCTAssertTrue(ui.signIns.isEmpty)
+    }
+
+    func testDeclinedOperationUsesUpToken() async throws {
+        _ = try await register(rk: true)
+        _ = try await register(rk: true, user: "second")
+        let ga = CBOR.map([.int(1): .text("github.com"), .int(2): .bytes(clientDataHash)])
+        let (_, token) = try await getToken(permissions: 0x02)
+        ui.decision = .denied // two accounts: the card asks which, and the user declines
+        var (status, _) = await call(0x02, withToken(ga, key: 6, token: try XCTUnwrap(token)))
+        XCTAssertEqual(status, CTAPStatus.operationDenied.rawValue)
+        ui.decision = .approved
+        (status, _) = await call(0x02, withToken(ga, key: 6, token: try XCTUnwrap(token)))
+        XCTAssertEqual(status, CTAPStatus.pinAuthInvalid.rawValue, "the Touch ID served one attempt")
+    }
+
+    func testAuthenticatorSelectionCommand() async {
+        var (status, body) = await call(0x0B, nil)
+        XCTAssertEqual(status, 0)
+        XCTAssertNil(body)
+        ui.decision = .denied
+        (status, _) = await call(0x0B, nil)
+        XCTAssertEqual(status, CTAPStatus.operationDenied.rawValue)
+    }
+
+    // MARK: Credential management
+
+    private func credMgmt(_ subCommand: Int, _ params: CBOR? = nil, token: Data?,
+                          proto: PinUvAuthProtocol = .two) async -> (UInt8, CBOR?) {
+        var pairs: [CBOR.Pair] = [.init(.int(1), .int(subCommand))]
+        if let params { pairs.append(.init(.int(2), params)) }
+        if let token {
+            let message = Data([UInt8(subCommand)]) + (params?.encoded ?? Data())
+            pairs.append(.init(.int(3), .int(proto.rawValue)))
+            pairs.append(.init(.int(4), .bytes(proto.authenticate(key: token, message))))
+        }
+        return await call(0x0A, .map(pairs))
+    }
+
+    private func registerAt(_ rpId: String, user: String, rk: Bool = true) async {
+        let params = CBOR.map([
+            .int(1): .bytes(clientDataHash),
+            .int(2): .map([.text("id"): .text(rpId), .text("name"): .text(rpId.uppercased())]),
+            .int(3): .map([.text("id"): .bytes(Data(user.utf8)), .text("name"): .text(user),
+                           .text("displayName"): .text(user.capitalized)]),
+            .int(4): .array([.map([.text("alg"): .int(-7), .text("type"): .text("public-key")])]),
+            .int(7): .map([.text("rk"): .bool(rk)]),
+        ])
+        let (status, _) = await call(0x01, params)
+        XCTAssertEqual(status, 0)
+    }
+
+    func testCredentialManagement() async throws {
+        await registerAt("github.com", user: "work")
+        await registerAt("github.com", user: "home")
+        await registerAt("example.com", user: "me")
+        await registerAt("example.com", user: "ssh", rk: false)
+        let (_, token) = try await getToken(permissions: 0x04, rpId: nil)
+        XCTAssertEqual(ui.tokenPrompts.last?.signs, false, "a cm token keeps no Touch ID")
+
+        var (status, body) = await credMgmt(0x01, token: token)
+        XCTAssertEqual(status, 0)
+        XCTAssertEqual(body?[1]?.int, 3, "discoverable only")
+        XCTAssertEqual(body?[2]?.int, 100)
+
+        (status, body) = await credMgmt(0x02, token: token)
+        XCTAssertEqual(body?[3]?["id"]?.text, "example.com")
+        XCTAssertEqual(body?[3]?["name"]?.text, "EXAMPLE.COM")
+        XCTAssertEqual(body?[4]?.bytes, Data(SHA256.hash(data: Data("example.com".utf8))))
+        XCTAssertEqual(body?[5]?.int, 2)
+        (status, body) = await credMgmt(0x03, token: nil)
+        XCTAssertEqual(body?[3]?["id"]?.text, "github.com")
+        (status, _) = await credMgmt(0x03, token: nil)
+        XCTAssertEqual(status, CTAPStatus.notAllowed.rawValue, "past the end")
+
+        let github = CBOR.map([.int(1): .bytes(Data(SHA256.hash(data: Data("github.com".utf8))))])
+        (status, body) = await credMgmt(0x04, github, token: token)
+        XCTAssertEqual(status, 0)
+        XCTAssertEqual(body?[9]?.int, 2)
+        XCTAssertEqual(body?[6]?["name"]?.text, "work")
+        let firstId = try XCTUnwrap(body?[7]?["id"]?.bytes)
+        let cose = try XCTUnwrap(body?[8])
+        let x963 = Data([0x04]) + (try XCTUnwrap(cose[-2]?.bytes)) + (try XCTUnwrap(cose[-3]?.bytes))
+        XCTAssertEqual(x963, keys.keys[firstId]?.publicKey.x963Representation)
+        (status, _) = await call(0x04, nil) // any other command ends the enumeration
+        (status, _) = await credMgmt(0x05, token: nil)
+        XCTAssertEqual(status, CTAPStatus.notAllowed.rawValue)
+
+        // updateUserInformation replaces the site's names; user.id must match.
+        let descriptor = CBOR.map([.text("id"): .bytes(firstId), .text("type"): .text("public-key")])
+        (status, _) = await credMgmt(0x07, .map([.int(2): descriptor,
+                                                 .int(3): .map([.text("id"): .bytes(Data("work".utf8)),
+                                                                .text("name"): .text("work@corp")])]),
+                                     token: token)
+        XCTAssertEqual(status, 0)
+        XCTAssertEqual(store.credential(id: firstId)?.userName, "work@corp")
+        XCTAssertNil(store.credential(id: firstId)?.userDisplayName)
+        (status, _) = await credMgmt(0x07, .map([.int(2): descriptor,
+                                                 .int(3): .map([.text("id"): .bytes(Data("x".utf8))])]),
+                                     token: token)
+        XCTAssertEqual(status, CTAPStatus.invalidParameter.rawValue)
+
+        // deleteCredential asks on the phone.
+        ui.decision = .denied
+        (status, _) = await credMgmt(0x06, .map([.int(2): descriptor]), token: token)
+        XCTAssertEqual(status, CTAPStatus.operationDenied.rawValue)
+        XCTAssertNotNil(store.credential(id: firstId))
+        ui.decision = .approved
+        (status, _) = await credMgmt(0x06, .map([.int(2): descriptor]), token: token)
+        XCTAssertEqual(status, 0)
+        XCTAssertNil(store.credential(id: firstId))
+        XCTAssertNil(keys.keys[firstId])
+        XCTAssertEqual(ui.deletions.count, 2)
+        (status, _) = await credMgmt(0x06, .map([.int(2): descriptor]), token: token)
+        XCTAssertEqual(status, CTAPStatus.noCredentials.rawValue)
+    }
+
+    func testCredentialManagementAuthorization() async throws {
+        await registerAt("github.com", user: "work")
+        var (status, _) = await credMgmt(0x01, token: nil)
+        XCTAssertEqual(status, CTAPStatus.puatRequired.rawValue)
+
+        var (_, token) = try await getToken(permissions: 0x02)
+        (status, _) = await credMgmt(0x01, token: token)
+        XCTAssertEqual(status, CTAPStatus.pinAuthInvalid.rawValue, "no cm permission")
+
+        (_, token) = try await getToken(permissions: 0x04, rpId: "github.com")
+        (status, _) = await credMgmt(0x01, token: token)
+        XCTAssertEqual(status, CTAPStatus.pinAuthInvalid.rawValue, "metadata needs a token without RP ID")
+        let other = CBOR.map([.int(1): .bytes(Data(SHA256.hash(data: Data("example.com".utf8))))])
+        (status, _) = await credMgmt(0x04, other, token: token)
+        XCTAssertEqual(status, CTAPStatus.pinAuthInvalid.rawValue, "a scoped token reaches its site only")
+        let github = CBOR.map([.int(1): .bytes(Data(SHA256.hash(data: Data("github.com".utf8))))])
+        (status, _) = await credMgmt(0x04, github, token: token)
+        XCTAssertEqual(status, 0)
+
+        // A used cm token stays valid up to 600 s.
+        clock += 500
+        (status, _) = await credMgmt(0x04, github, token: token)
+        XCTAssertEqual(status, 0)
+        clock += 101
+        (status, _) = await credMgmt(0x04, github, token: token)
+        XCTAssertEqual(status, CTAPStatus.pinAuthInvalid.rawValue)
+
+        // Unknown IDs: the token is checked first, so a host without one
+        // cannot probe which IDs exist.
+        let unknown = CBOR.map([.int(2): .map([.text("id"): .bytes(Data(repeating: 9, count: 32)),
+                                               .text("type"): .text("public-key")])])
+        (_, token) = try await getToken(permissions: 0x04, rpId: nil)
+        (status, _) = await credMgmt(0x06, unknown, token: Data(repeating: 1, count: 32))
+        XCTAssertEqual(status, CTAPStatus.pinAuthInvalid.rawValue)
+        (status, _) = await credMgmt(0x06, unknown, token: token)
+        XCTAssertEqual(status, CTAPStatus.noCredentials.rawValue)
+        // A cm token is not bound to the site of a delete: listing still works.
+        let work = try XCTUnwrap(store.allCredentials().first)
+        let descriptor = CBOR.map([.text("id"): .bytes(work.id), .text("type"): .text("public-key")])
+        (status, _) = await credMgmt(0x07, .map([.int(2): descriptor,
+                                                 .int(3): .map([.text("id"): .bytes(work.userId)])]),
+                                     token: token)
+        XCTAssertEqual(status, 0)
+        (status, _) = await credMgmt(0x01, token: token)
+        XCTAssertEqual(status, 0)
+
+        (status, _) = await credMgmt(0x09, token: token)
+        XCTAssertEqual(status, CTAPStatus.invalidSubcommand.rawValue)
+        (status, _) = await call(0x41, .map([.int(1): .int(1)]))
+        XCTAssertEqual(status, CTAPStatus.invalidCommand.rawValue, "no pre-release credMgmt")
     }
 }
 
