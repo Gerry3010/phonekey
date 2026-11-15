@@ -8,6 +8,8 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/Gerry3010/phonekey/linux/internal/client"
@@ -88,16 +90,13 @@ func fidoSelftest(ctx context.Context, args []string) error {
 	}
 	fmt.Printf("getInfo: %v, AAGUID %x\n", info.Versions, info.AAGUID)
 
-	userID := random(16)
-	// Every run gets its own account name: test passkeys from earlier runs stay
-	// on the phone, and step 2 asks the user to pick one of them.
-	label := "Self-test " + time.Now().Format("2006-01-02 15:04:05")
+	userID, label, detail := selftestAccount(time.Now())
 	fmt.Printf("\n1/3 Register a passkey for %s: confirm on the phone, then Touch ID.\n", *rpID)
 	var mc ctap.MakeCredentialResponse
 	err = ctap.Call(call, ctap.CmdMakeCredential, ctap.MakeCredentialRequest{
 		ClientDataHash: random(32),
 		RP:             ctap.RP{ID: *rpID, Name: "PhoneKey self-test"},
-		User:           ctap.User{ID: userID, Name: label, DisplayName: label},
+		User:           ctap.User{ID: userID, Name: label, DisplayName: detail},
 		Params:         []ctap.CredParam{{Alg: -7, Type: "public-key"}},
 		Options:        map[string]bool{"rk": true},
 	}, &mc)
@@ -134,7 +133,7 @@ func fidoSelftest(ctx context.Context, args []string) error {
 	// Compare the credential first: a passkey from an earlier run would fail
 	// the signature check against this run's key, which reads like a bug.
 	if !bytes.Equal(ga.Credential.ID, reg.CredentialID) {
-		return fmt.Errorf("FAIL: the phone signed with another %s passkey, not %q. Pick that one, or delete old test passkeys in PhoneKey → Passkeys & security keys", *rpID, label)
+		return fmt.Errorf("FAIL: the phone signed with an older %s passkey. Delete the old test passkeys in PhoneKey → Passkeys & security keys and run the self-test again", *rpID)
 	}
 	fmt.Println("  ok: same credential")
 	a1, err := ctap.VerifyAssertion(reg.PublicKey, *rpID, cdh, &ga)
@@ -168,6 +167,22 @@ func fidoSelftest(ctx context.Context, args []string) error {
 		return err
 	}
 
-	fmt.Printf("\nPASS. The test passkey for %s stays on the phone; delete it in PhoneKey → Passkeys & security keys.\n", *rpID)
+	fmt.Printf("\nPASS. The test passkey %q stays on the phone. The next self-test from this computer replaces it; to remove it, use PhoneKey → Passkeys & security keys.\n", label)
 	return nil
+}
+
+// selftestAccount names the test account after this computer, the same name
+// the phone shows as "Request from …". The user ID depends only on that name,
+// so each run from the same computer registers the same account again, and the
+// phone replaces the old passkey instead of collecting one per run.
+func selftestAccount(now time.Time) (userID []byte, name, displayName string) {
+	host, _ := os.Hostname()
+	if short, _, _ := strings.Cut(host, "."); short != "" {
+		host = short
+	} else {
+		host = "this computer"
+	}
+	sum := sha256.Sum256([]byte("phonekey self-test\x00" + host))
+	name = "Self-test from " + host
+	return sum[:16], name, name + ", " + now.Format("2 Jan 2006 15:04")
 }

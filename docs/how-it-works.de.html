@@ -616,7 +616,7 @@ phonekey fido selftest
   <ol class="road">
     <li><span class="mark ok"></span><div class="body"><span class="state">Phase 0 · fertig</span><h3>Projektstart</h3><p>Repo, Xcode-Projekt, Dokumentation.</p></div></li>
     <li><span class="mark ok"></span><div class="body"><span class="state">Phase 1 · fertig</span><h3>Verbindung und Desk-Modus</h3><p>usbmuxd-Tunnel, verschlüsselte Sitzung, Pairing per QR-Code, Status, Fotos, Desk-Modus. Auf dem iPhone 7 mit iOS 15.8.2 geprüft.</p></div></li>
-    <li><span class="mark warn"></span><div class="body"><span class="state">Phase 2 · fertig, Nacharbeit offen</span><h3>Sicherheitsschlüssel und Passkeys</h3><p>Auf echtem Linux mit Selbsttest, libfido2 und OpenSSH geprüft. Offen: Chrome-Fix (PR #8, gemergt) und neue Touch-ID-Abfrage (PR #9) aufs iPhone bringen, dann Chrome und Firefox noch einmal testen.</p></div></li>
+    <li><span class="mark warn"></span><div class="body"><span class="state">Phase 2 · fertig, Nacharbeit offen</span><h3>Sicherheitsschlüssel und Passkeys</h3><p>Auf echtem Linux mit Selbsttest, libfido2 und OpenSSH geprüft. Chrome-Fix (PR #8) und die neue Touch-ID-Abfrage (PR #9 und #12) sind auf dem iPhone. Offen ist der neue Test in Chrome und Firefox.</p></div></li>
     <li><span class="mark"></span><div class="body"><span class="state">Phase 3 · Spezifikation in PR #6</span><h3>Mehr FIDO</h3>
       <ul class="plain">
         <li>3a, hmac-secret: LUKS-Laufwerke mit <code>systemd-cryptenroll</code> entsperren, solange du angemeldet bist (Datenpartitionen, externe Platten, nicht das Root-Laufwerk beim Booten). Das Geheimnis pro Schlüssel liegt verschlüsselt mit dessen Secure-Enclave-Schlüssel und ist nur zum Rechnen kurz im Speicher der App.</li>
