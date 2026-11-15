@@ -414,7 +414,7 @@ footer { margin-top: 2rem; padding-top: 1rem; border-top: 1px solid var(--line);
     <h3>Registrieren</h3>
     <figure class="dia">
       <div class="scroll">
-      <svg viewBox="0 0 360 380" role="img" aria-label="Registrierung: Der Browser schickt makeCredential an phonekey, phonekey schickt ctap.request ans iPhone und meldet dem Browser alle 100 Millisekunden KEEPALIVE. Das iPhone zeigt Website und Konto, nach Tippen und Touch ID erzeugt der Secure Enclave einen Schlüssel. Die Antwort geht zurück an den Browser.">
+      <svg viewBox="0 0 360 380" role="img" aria-label="Registrierung: Der Browser schickt makeCredential an phonekey, phonekey schickt ctap.request ans iPhone und meldet dem Browser alle 100 Millisekunden KEEPALIVE. Das iPhone zeigt Website und Konto, nach Touch ID erzeugt der Secure Enclave einen Schlüssel. Die Antwort geht zurück an den Browser.">
         <defs>
           <marker id="a3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="mk" d="M0,0 L10,5 L0,10 z"/></marker>
           <marker id="a3m" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="mk-muted" d="M0,0 L10,5 L0,10 z"/></marker>
@@ -443,7 +443,7 @@ footer { margin-top: 2rem; padding-top: 1rem; border-top: 1px solid var(--line);
         <rect class="box-touch" x="196" y="124" width="158" height="104" rx="8"/>
         <text x="275" y="148" text-anchor="middle">zeigt Website, Konto,</text>
         <text x="275" y="164" text-anchor="middle">Passkey ja/nein</text>
-        <text class="t-touch" x="275" y="188" text-anchor="middle">Tippen, Touch ID</text>
+        <text class="t-touch" x="275" y="188" text-anchor="middle">Touch ID sofort</text>
         <text x="275" y="212" text-anchor="middle">neuer P-256-Schlüssel</text>
 
         <text x="244" y="258" text-anchor="middle">ctap.response</text>
@@ -460,7 +460,7 @@ footer { margin-top: 2rem; padding-top: 1rem; border-top: 1px solid var(--line);
     <ol class="steps">
       <li><div>Die Website ruft WebAuthn auf. Der Browser schickt <code>authenticatorMakeCredential</code> als CBOR über CTAPHID an das <code>/dev/hidraw</code>-Gerät.</div></li>
       <li><div><code>phonekey</code> verpackt die Anfrage in <code>ctap.request</code> und schickt sie verschlüsselt ans iPhone. Bis die Antwort da ist, meldet es dem Browser alle 100 ms „warte auf Benutzer“.</div></li>
-      <li><div>Die App zeigt, welcher Rechner fragt, für welche Website (<code>rp.id</code>), für welches Konto und ob ein Passkey entsteht. Du tippst auf Bestätigen, dann kommt Touch ID.</div></li>
+      <li><div>Die App zeigt, welcher Rechner fragt, für welche Website (<code>rp.id</code>), für welches Konto und ob ein Passkey entsteht. Touch ID öffnet sich sofort. Brichst du Touch ID ab, bleibt die Anfrage offen.</div></li>
       <li><div>Der Secure Enclave erzeugt einen neuen P-256-Schlüssel. Benutzen lässt er sich nur nach Touch ID mit einem eingelernten Finger, und er verlässt den Chip nie. Die Credential-ID besteht aus 32 Zufallsbytes und benennt den Schlüssel nur.</div></li>
       <li><div>Die Antwort enthält den öffentlichen Schlüssel, die Credential-ID, das Attestierungsformat <code>none</code> (kein Herstellerzertifikat) und den Zähler 0. Die Website speichert den öffentlichen Schlüssel.</div></li>
     </ol>
@@ -476,13 +476,14 @@ footer { margin-top: 2rem; padding-top: 1rem; border-top: 1px solid var(--line);
     <ol class="steps">
       <li><div>Der Browser schickt <code>authenticatorGetAssertion</code> mit der Website und meist einer Liste erlaubter Credential-IDs. Meldest du dich per Passkey ohne Benutzernamen an, ist die Liste leer.</div></li>
       <li><div>Die App sucht passende Schlüssel. Findet sie keinen, antwortet sie sofort mit <code>NO_CREDENTIALS</code>, ohne etwas anzuzeigen.</div></li>
-      <li><div>Gibt es für die Website mehrere Passkeys, zeigt die App eine Kontoauswahl. Sonst zeigt sie Website und Konto.</div></li>
-      <li><div>Touch ID gibt den Schlüssel im Secure Enclave zum Signieren frei. Die Antwort trägt die Flags „anwesend“ und „verifiziert“, und der Zähler des Schlüssels steigt um eins.</div></li>
+      <li><div>Die App zeigt Website und Konto und öffnet sofort Touch ID. Gibt es für die Website mehrere Konten, ist eines vorgewählt: ein Konto, das du für die Website als Vorschlag markiert hast (Stern), sonst das zuletzt benutzte, sonst das neueste. Über „Other account“ wählst du ein anderes, die Liste zeigt erst die Vorschläge, dann die übrigen Konten.</div></li>
+      <li><div>Meldest du dich mit einem anderen als dem vorgewählten Konto an, fragt die App nach dem „✓“, ob sie es für die Website künftig vorschlagen soll: zusätzlich, statt eines bisherigen Vorschlags oder nein. Die Frage kommt erst, wenn die Antwort beim Rechner ist, und bleibt auf dem iPhone. In der App setzt oder entfernst du Vorschläge auch per Wischen nach rechts in „Passkeys &amp; security keys“.</div></li>
+      <li><div>Dieses eine Touch ID gibt auch den Schlüssel im Secure Enclave zum Signieren frei. Die Antwort trägt die Flags „anwesend“ und „verifiziert“, und der Zähler des Schlüssels steigt um eins.</div></li>
       <li><div>Der Browser bekommt die Signatur, bei Passkeys auch den Benutzer. Die Website prüft sie mit dem gespeicherten öffentlichen Schlüssel.</div></li>
     </ol>
     <p>Manche Programme fragen vorher still nach (<code>up=false</code>), ob ein Schlüssel passt. OpenSSH macht das zum Beispiel, bevor es einen residenten Schlüssel anlegt. Ohne Treffer antwortet das iPhone mit <code>NO_CREDENTIALS</code>. Mit Treffer antwortet es <code>UNSUPPORTED_OPTION</code>, weil der Secure Enclave ohne Touch ID nicht signiert.</p>
     <div class="note warn">
-      <p>Neue Abfrage, gebaut in PR #9 und noch nicht auf dem iPhone: Bisher tippst du erst auf Bestätigen, danach kommt Touch ID. Künftig öffnet sich Touch ID sofort, bei mehreren Konten direkt nach der Kontowahl. Der Abbrechen-Knopf im Touch-ID-Dialog heißt „Details“. Er lehnt nichts ab, sondern zeigt eine Karte mit Website, Konto und Art der Anfrage, dazu die Knöpfe „Touch ID“ (noch einmal versuchen) und „Decline“. Nur „Decline“ lehnt ab. Außerdem reicht für eine Anmeldung dann ein einziges Touch ID, weil dieselbe Freigabe auch die Signatur im Secure Enclave abdeckt.</p>
+      <p>Abbrechen ist nicht Ablehnen: Der Abbrechen-Knopf im Touch-ID-Dialog heißt „Details“. Er zeigt eine Karte mit Website, Konto und Art der Anfrage, dazu „Touch ID“ (noch einmal versuchen) und „Decline“. Nur „Decline“ lehnt ab, nach 60 Sekunden ohne Antwort bricht die Anfrage ab. Ist die Antwort beim Rechner, zeigt die App kurz „✓ Signed in to … as …“. So siehst du, dass diese Anfrage erledigt ist, bevor die nächste kommt.</p>
     </div>
   </div>
 

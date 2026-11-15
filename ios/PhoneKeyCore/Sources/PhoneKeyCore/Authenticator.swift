@@ -40,10 +40,14 @@ public struct StoredCredential: Codable, Equatable, Identifiable {
     public var signCount: UInt32
     /// credProtect level 1–3, if the platform asked for one.
     public var credProtect: Int?
+    /// When it last signed in. App bookkeeping; absent in data from before.
+    public var lastUsed: Date?
+    /// The user wants this account suggested first on its site (app UI).
+    public var suggested: Bool?
 
     public init(id: Data, rpId: String, rpName: String?, userId: Data, userName: String?,
                 userDisplayName: String?, discoverable: Bool, created: Date, signCount: UInt32,
-                credProtect: Int? = nil) {
+                credProtect: Int? = nil, lastUsed: Date? = nil, suggested: Bool? = nil) {
         self.id = id
         self.rpId = rpId
         self.rpName = rpName
@@ -54,6 +58,8 @@ public struct StoredCredential: Codable, Equatable, Identifiable {
         self.created = created
         self.signCount = signCount
         self.credProtect = credProtect
+        self.lastUsed = lastUsed
+        self.suggested = suggested
     }
 
     /// The best label for the account.
