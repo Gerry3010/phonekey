@@ -64,18 +64,22 @@ struct CredentialsView: View {
                 }
             }
         }
-        .alert(deleteTitle, isPresented: Binding(
+        // The keys go into the alert as its presented value: on iOS 15 the
+        // binding is reset to "not presented" (clearing pendingDelete) before
+        // the button's action runs, so the action must not read the state.
+        .alert(Self.deleteTitle(pendingDelete), isPresented: Binding(
             get: { !pendingDelete.isEmpty }, set: { if !$0 { pendingDelete = [] } }
-        )) {
+        ), presenting: pendingDelete.isEmpty ? nil : pendingDelete) { keys in
             Button("Delete", role: .destructive) {
-                store.delete(pendingDelete)
-                selection.subtract(pendingDelete.map(\.id))
-                pendingDelete = []
-                if store.all.isEmpty { editMode = .inactive }
+                let ids = Set(keys.map(\.id))
+                let deletesAll = Set(store.all.map(\.id)).isSubset(of: ids)
+                store.delete(keys)
+                selection.subtract(ids)
+                if deletesAll { editMode = .inactive }
             }
-            Button("Cancel", role: .cancel) { pendingDelete = [] }
-        } message: {
-            Text(deleteMessage)
+            Button("Cancel", role: .cancel) {}
+        } message: { keys in
+            Text(Self.deleteMessage(keys))
         }
         .sheet(item: $renaming) { target in
             RenameSheet(target: target, store: store)
@@ -170,14 +174,14 @@ struct CredentialsView: View {
 
     // MARK: Deleting
 
-    private var deleteTitle: String {
-        pendingDelete.count == 1 ? "Delete this key?" : "Delete \(pendingDelete.count) keys?"
+    private static func deleteTitle(_ keys: [StoredCredential]) -> String {
+        keys.count == 1 ? "Delete this key?" : "Delete \(keys.count) keys?"
     }
 
-    private var deleteMessage: String {
-        let sites = Set(pendingDelete.map(\.rpId)).sorted()
+    private static func deleteMessage(_ keys: [StoredCredential]) -> String {
+        let sites = Set(keys.map(\.rpId)).sorted()
         let where_ = sites.count <= 3 ? sites.joined(separator: ", ") : "\(sites.count) sites"
-        if pendingDelete.count == 1, let credential = pendingDelete.first {
+        if keys.count == 1, let credential = keys.first {
             return "PhoneKey can no longer sign in to \(credential.rpId) as \(credential.accountLabel). "
                 + "This cannot be undone. Make sure you have another way to sign in."
         }
