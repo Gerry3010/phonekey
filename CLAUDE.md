@@ -1,0 +1,105 @@
+# PhoneKey — Notizen für Claude
+
+Ein altes iPhone 7 als Peripherie-Station für einen Linux-Rechner: FIDO2-Security-Key und
+Passkeys mit Touch ID, Kamera, Mikrofon. Monorepo aus iOS-App, Linux-Daemon und gemeinsamem
+Protokoll. Touch ID dient nur dem Security-Key; einen Freigabe-Knopf für Coding-Agents gibt es
+bewusst nicht.
+
+## Die eine Regel
+
+Das Zielgerät ist ein **iPhone 7 mit höchstens iOS 15.8**, das Deployment Target bleibt `15.0`.
+
+- Nur iOS-15-APIs: kein `NavigationStack`, keine Observation (`@Observable`), keine Passkey- oder
+  Credential-Provider-APIs, kein Swift Charts. Previews als `PreviewProvider`.
+- SwiftUI-Alerts unter iOS 15: Beim Tippen auf einen Knopf wird das `isPresented`-Binding
+  zurückgesetzt, bevor die Knopf-Aktion läuft. Daten für die Aktion über `presenting:` übergeben,
+  nie aus dem State lesen, den der Binding-Setter leert (im iOS-17-Simulator fällt das nicht auf).
+- **Es gibt keinen iOS-15-Simulator mehr** (die Runtime läuft auf macOS 26 nicht). Simulator-Tests
+  laufen auf iOS 17+. Ob etwas auf iOS 15 funktioniert, zeigt nur das echte Gerät.
+- Die App läuft **nur im Vordergrund** (Desk-Station mit Guided Access). Im Hintergrund stoppt die
+  Kamera, Sockets brechen ab und Touch ID fragt nicht. Nichts bauen, das Hintergrundbetrieb braucht.
+- Hochformat in **beiden Richtungen** (Kabel oben). Deshalb UIKit-App- und Scene-Delegate mit eigenem
+  `UIHostingController` (`PhoneKeyApp.swift`), kein SwiftUI-`App`: dessen Root-Controller sperrt auf
+  iOS 15 Upside-down, egal was in der Info.plist steht.
+
+## Arbeitsteilung
+
+- `ios/` ist die Apple-Seite.
+- `linux/` ist der Daemon in Go. Er zielt auf Linux, läuft aber auch auf macOS und wird dort über
+  den usbmuxd des Macs gegen das echte iPhone getestet. Claude auf dem Mac darf hier ausdrücklich
+  mitbauen, damit Claude auf Linux frei bleibt. Linux-only-Teile (`/dev/uhid` ab Phase 3) hinter
+  Build-Tags, getestet in einer Linux-VM.
+- `docs/protocol.md` ist der Vertrag zwischen beiden, `docs/protocol-vectors.json` die
+  Testvektoren dazu. Änderungen nur per PR. Der Code folgt der Spec, nicht umgekehrt.
+- Swift (CryptoKit) und Go (`flynn/noise`) implementieren Noise unabhängig voneinander. Das ist
+  gewollt: Interop-Tests zwischen beiden fangen Fehler, die eine einzelne Implementierung nicht sieht.
+
+## Sicherheit
+
+- Private Schlüssel entstehen im Secure Enclave und verlassen ihn nie.
+- Keine Keys, Pairing-Secrets, Challenges oder Credential-IDs in Logs. `os_log`/`Logger` für so
+  etwas nur mit `privacy: .private`.
+- Das Repo ist **public**: keine Secrets, Test-Credentials, Gerätenamen oder lokalen Pfade committen.
+
+## Git
+
+- Nie direkt auf `main`. Branches `feat/…`, `fix/…`, `chore/…`, `docs/…` von `staging` abzweigen,
+  PRs gegen `staging`.
+- Commits mit der GitHub-Noreply-Adresse (lokal per `git config user.email` gesetzt).
+- Keine Worktrees.
+
+## Aufbau
+
+```
+ios/PhoneKey.xcodeproj   Xcode-16+-Format mit synchronisierten Ordnern
+ios/PhoneKey/            App-Code: neue Dateien landen automatisch im Target
+ios/PhoneKey-Info.plist  nur das URL-Schema phonekey://, Rest kommt aus INFOPLIST_KEY_*
+ios/PhoneKeyCore/        Swift-Package: Noise, Wire, PhoneSession (plattformneutral, testbar)
+ios/PhoneKeyTests/       XCTest-Unit-Tests, gehostet in der App
+docs/architecture.md     Desk-Station, Transport, Grenzen, Roadmap
+docs/protocol.md         Wire-Protokoll (Entwurf)
+linux/                   Linux-Daemon
+```
+
+Neue Swift-Dateien brauchen keinen Eintrag im `project.pbxproj`. Das pbxproj nur für Build Settings
+oder neue Targets anfassen.
+
+## Build & Test
+
+```bash
+(cd ios/PhoneKeyCore && swift test)      # Noise, Wire, Session – auf dem Mac, in Sekunden
+(cd linux && go vet ./... && go test ./...)
+xcodebuild -project ios/PhoneKey.xcodeproj -scheme PhoneKey -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO build
+xcodebuild test -project ios/PhoneKey.xcodeproj -scheme PhoneKey -destination 'platform=iOS Simulator,name=iPhone SE (3rd generation)'
+```
+
+Das iPhone SE (3. Gen.) hat dieselbe Bildschirmgröße wie das iPhone 7 (4,7″).
+
+**Interop-Test ohne iPhone:** Der Simulator teilt sich das Loopback-Interface mit dem Mac. App im
+Simulator starten, dann `phonekey pair -connect tcp:127.0.0.1:20555` und die ausgegebene URL mit
+`xcrun simctl openurl booted '<url>'` öffnen. `PHONEKEY_CONFIG_DIR` auf ein Testverzeichnis setzen,
+damit echte Host-Keys unberührt bleiben. Im Simulator liefert die Kamera ein Testbild.
+
+**Aufs iPhone 7 (iOS 15) installieren:** `xcodebuild test` auf dem Gerät scheitert mit „Logic
+Testing Unavailable“, und `devicectl` kann Geräte vor iOS 17 nicht bedienen („usage assertion“).
+Was funktioniert: signiert bauen (`-allowProvisioningUpdates`), dann per Xcode Run aufs Gerät, zum
+Beispiel per AppleScript (`run destinations … whose name contains "iPhone 7"`, `run`). Beim ersten
+Start muss das iPhone online sein, damit iOS das Entwicklerzertifikat prüft (Einstellungen → Allgemein
+→ VPN & Geräteverwaltung → App überprüfen). Danach geht es offline. Das Entwicklerprofil gilt ein Jahr.
+
+**FIDO testen:**
+- `phonekey fido selftest` registriert einen Test-Passkey (`phonekey.test`), meldet sich zweimal an
+  und prüft alles hostseitig. Läuft auch auf macOS, gegen Simulator (`-connect tcp:…`) oder iPhone.
+- Touch ID im Simulator: einmal anlernen mit
+  `xcrun simctl spawn <udid> notifyutil -s com.apple.BiometricKit.enrollmentChanged 1` und
+  `… notifyutil -p com.apple.BiometricKit.enrollmentChanged`, Finger passt mit
+  `… notifyutil -p com.apple.BiometricKit_Sim.fingerTouch.match`. Simulator-Taps brauchen
+  `duration: 0.1`.
+- `/dev/uhid`, libfido2 und `ssh-keygen -t ecdsa-sk` in einer Lima-VM (`limactl start
+  template://ubuntu-lts`). Die VM erreicht die App im Simulator über `host.lima.internal:20555`.
+  Einrichtung wie in `linux/README.md`.
+- Der Simulator hat keinen Secure Enclave; dort entsteht der Schlüssel als normaler
+  Keychain-Schlüssel mit derselben Touch-ID-Regel. Nur das echte iPhone prüft den Secure Enclave.
+
+**Vektoren:** Nach jeder Protokolländerung `go run ./cmd/gen-vectors ../docs/protocol-vectors.json`
+in `linux/`. Go und Swift prüfen beide gegen diese Datei.

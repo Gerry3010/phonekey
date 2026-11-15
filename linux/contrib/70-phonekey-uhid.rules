@@ -1,0 +1,7 @@
+# Lets the user logged in at the machine create virtual HID devices, which
+# `phonekey fido run` needs. Install to /etc/udev/rules.d/.
+#
+# The name must sort before 73-seat-late.rules, which turns the "uaccess" tag
+# into an ACL for the active session. static_node also opens the node before
+# the uhid module is loaded, so opening it loads the module.
+KERNEL=="uhid", SUBSYSTEM=="misc", TAG+="uaccess", OPTIONS+="static_node=uhid"
