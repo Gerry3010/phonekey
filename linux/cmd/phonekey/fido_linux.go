@@ -22,6 +22,7 @@ func fidoRun(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("fido run", flag.ExitOnError)
 	var cf connFlags
 	cf.register(fs)
+	trace := fs.Bool("trace", false, "log each CTAP request and its status (no keys, challenges or IDs)")
 	fs.Parse(args)
 	cl, err := cf.client()
 	if err != nil {
@@ -48,16 +49,35 @@ func fidoRun(ctx context.Context, args []string) error {
 		}
 		backoff, lastErr = time.Second, ""
 		logger.Printf("connected to %s; security key available", s.Phone.Name)
-		err = serveKey(ctx, s)
+		var tracer *log.Logger
+		if *trace {
+			tracer = logger
+		}
+		err = serveKey(ctx, s, tracer)
 		logger.Printf("security key removed: %v", err)
 	}
 	return nil
 }
 
-type phoneBackend struct{ mux *client.Mux }
+type phoneBackend struct {
+	mux   *client.Mux
+	trace *log.Logger // nil unless `fido run -trace`
+}
 
 func (b phoneBackend) CBOR(ctx context.Context, req []byte) ([]byte, error) {
-	return b.mux.CTAP(ctx, req)
+	if b.trace == nil {
+		return b.mux.CTAP(ctx, req)
+	}
+	b.trace.Printf("-> %s", traceRequest(req))
+	start := time.Now()
+	resp, err := b.mux.CTAP(ctx, req)
+	took := time.Since(start).Round(time.Millisecond)
+	if err != nil {
+		b.trace.Printf("<- error after %v: %v", took, err)
+	} else {
+		b.trace.Printf("<- %s after %v", traceResponse(resp), took)
+	}
+	return resp, err
 }
 
 func (b phoneBackend) Wink(ctx context.Context) error {
@@ -68,7 +88,7 @@ func (b phoneBackend) Wink(ctx context.Context) error {
 	return err
 }
 
-func serveKey(ctx context.Context, s *client.Session) error {
+func serveKey(ctx context.Context, s *client.Session, trace *log.Logger) error {
 	mux := s.Mux()
 	defer mux.Close()
 	dev, err := uhid.Create(uhid.Config{
@@ -82,7 +102,7 @@ func serveKey(ctx context.Context, s *client.Session) error {
 		return err
 	}
 	defer dev.Close()
-	hid := ctaphid.New(dev.Input, phoneBackend{mux})
+	hid := ctaphid.New(dev.Input, phoneBackend{mux: mux, trace: trace})
 	defer hid.Close()
 
 	go func() {
