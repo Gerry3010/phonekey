@@ -518,9 +518,10 @@ being issued, and 600 s after being issued at the latest.
 a token gets `mc` or `ga` (from `0x06`, `0x09` or `0x05`), the phone evaluates
 Touch ID with `evaluateAccessControl(rule, .useKeySign, …)` and keeps that
 context with the token. It serves exactly one operation: the signature, plus
-the `hmac-secret` decryption in the same request. It is invalidated when the
-token loses `mc`/`ga`, when the token expires, and when the session ends, so a
-token's lifetime never means keys stay unlocked. A token with only `cm` keeps
+the `hmac-secret` decryption in the same request. It is invalidated
+explicitly (`LAContext.invalidate()`) when the token loses `mc`/`ga`, when it
+expires, when a new token replaces it and when the session ends, so a token's
+lifetime never means keys stay unlocked. A token with only `cm` keeps
 no context. A `.useKeySign` context also covers the ECIES decryption (a key
 exchange in the Enclave) with the same key: checked on the iPhone 7 with
 iOS 15.8.2 on 15 Nov 2026, with further prompts forbidden after the one
@@ -578,8 +579,9 @@ From 3b, a makeCredential or getAssertion with a non-empty `pinUvAuthParam`:
 
 - `pinUvAuthProtocol` missing: `0x14`; unsupported: `0x02`.
 - `0x33` (`PIN_AUTH_INVALID`) if `pinUvAuthParam` does not verify over
-  `clientDataHash` with the session's token, if the token has expired, lacks
-  the `mc` or `ga` permission, or names another RP ID.
+  `clientDataHash` with the session's token, if `pinUvAuthProtocol` is not the
+  protocol the token was issued over (CTAP keeps a token per protocol), if the
+  token has expired, lacks the `mc` or `ga` permission, or names another RP ID.
 - Otherwise there is no second Touch ID: the Touch ID of the token request
   authorizes this one operation (see "Where the token's Touch ID goes"). For a
   registration the phone shows the account and confirms it when done. For a
@@ -601,8 +603,9 @@ absent.
 Lists and deletes **discoverable** credentials. Parameters: `subCommand`
 (key 1), `subCommandParams` (key 2), `pinUvAuthProtocol` (key 3),
 `pinUvAuthParam` (key 4). The subcommands that need it verify `pinUvAuthParam`
-over `subCommand || subCommandParams` (CBOR) with a token that has the `cm`
-permission; failure: `0x33`. A token with an RP ID only reaches that RP;
+over `subCommand || subCommandParams` with a token that has the `cm`
+permission; failure: `0x33`. `subCommandParams` counts as the CBOR bytes exactly
+as the host sent them, not re-encoded. A token with an RP ID only reaches that RP;
 `getCredsMetadata` and `enumerateRPsBegin` need a token without one. Unlike
 makeCredential and getAssertion, credential management never binds a token
 without an RP ID to a site. The token is checked before a credential ID is

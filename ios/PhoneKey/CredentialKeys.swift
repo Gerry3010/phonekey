@@ -3,6 +3,9 @@ import Foundation
 import PhoneKeyCore
 import Security
 
+/// A token's Touch ID is the `LAContext` that was evaluated for it.
+extension LAContext: @retroactive TouchIDAuthorization {}
+
 /// FIDO credential keys: P-256 in the Secure Enclave, usable only after
 /// Touch ID with any enrolled finger (re-enrolling fingers keeps them).
 /// The Simulator has no Secure Enclave; there the key is a normal keychain key
@@ -61,7 +64,7 @@ final class SecureEnclaveKeys: CredentialKeys {
         return x963
     }
 
-    func sign(id: Data, data: Data, reason: String, authorization: AnyObject?) async throws -> Data {
+    func sign(id: Data, data: Data, reason: String, authorization: TouchIDAuthorization?) async throws -> Data {
         // A token's Touch ID, or the card's that has just been given; only
         // without either does the signature ask on its own. Used up after.
         let context = (authorization as? LAContext) ?? handoff?.take() ?? LAContext()
@@ -119,7 +122,7 @@ final class SecureEnclaveKeys: CredentialKeys {
     /// Normally the sign-in card has just done Touch ID: the decryption uses
     /// that context and leaves it for the signature. Without one it asks itself
     /// and hands its own context on, so a sign-in still needs one Touch ID.
-    func decrypt(id: Data, ciphertext: Data, reason: String, authorization: AnyObject?) async throws -> Data {
+    func decrypt(id: Data, ciphertext: Data, reason: String, authorization: TouchIDAuthorization?) async throws -> Data {
         let handed = (authorization as? LAContext) ?? handoff?.peek()
         let context = handed ?? LAContext()
         if handed == nil {

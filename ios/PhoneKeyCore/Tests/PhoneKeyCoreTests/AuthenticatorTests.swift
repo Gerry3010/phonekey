@@ -39,7 +39,7 @@ final class SoftwareKeys: CredentialKeys {
     /// The authorization the last sign/decrypt got (a token's Touch ID).
     var lastAuthorization: AnyObject?
 
-    func sign(id: Data, data: Data, reason: String, authorization: AnyObject?) async throws -> Data {
+    func sign(id: Data, data: Data, reason: String, authorization: TouchIDAuthorization?) async throws -> Data {
         lastAuthorization = authorization
         if denySigning { throw CTAPStatus.operationDenied }
         guard let key = keys[id] else { throw CTAPStatus.noCredentials }
@@ -61,7 +61,7 @@ final class SoftwareKeys: CredentialKeys {
         return handle
     }
 
-    func decrypt(id: Data, ciphertext: Data, reason: String, authorization: AnyObject?) async throws -> Data {
+    func decrypt(id: Data, ciphertext: Data, reason: String, authorization: TouchIDAuthorization?) async throws -> Data {
         decryptCalls += 1
         if denyDecrypt { throw CTAPStatus.operationDenied }
         guard keys[id] != nil, let plain = sealed[ciphertext] else { throw CTAPStatus.noCredentials }
@@ -102,7 +102,10 @@ final class ScriptedUI: AuthenticatorUI {
     func confirmSelection() async -> UserDecision { decision }
 
     /// Stands in for the LAContext of the token's Touch ID.
-    final class Authorization {}
+    final class Authorization: TouchIDAuthorization {
+        var invalidated = false
+        func invalidate() { invalidated = true }
+    }
     var tokenDecision: TokenDecision = .approved(authorization: Authorization())
     var tokenPrompts: [TokenPrompt] = []
     var deletions: [StoredCredential] = []
@@ -704,6 +707,53 @@ final class AuthenticatorTests: XCTestCase {
         XCTAssertEqual(status, CTAPStatus.pinAuthInvalid.rawValue, "the Touch ID served one attempt")
     }
 
+    func testTokenBoundToItsProtocol() async throws {
+        _ = try await register(rk: true)
+        let ga = CBOR.map([.int(1): .text("github.com"), .int(2): .bytes(clientDataHash)])
+        let (_, token) = try await getToken(.two, permissions: 0x02)
+        var (status, _) = await call(0x02, withToken(ga, key: 6, token: try XCTUnwrap(token), proto: .one))
+        XCTAssertEqual(status, CTAPStatus.pinAuthInvalid.rawValue, "issued over protocol 2")
+        (status, _) = await call(0x02, withToken(ga, key: 6, token: try XCTUnwrap(token), proto: .two))
+        XCTAssertEqual(status, 0)
+    }
+
+    func testTokenTouchIDIsInvalidated() async throws {
+        _ = try await register(rk: true)
+        func fresh() -> ScriptedUI.Authorization {
+            let touchID = ScriptedUI.Authorization()
+            ui.tokenDecision = .approved(authorization: touchID)
+            return touchID
+        }
+        // A registration signs nothing, yet the Touch ID goes with it.
+        var touchID = fresh()
+        var (_, token) = try await getToken(permissions: 0x01)
+        XCTAssertFalse(touchID.invalidated)
+        _ = await call(0x01, withToken(makeCredentialParams(rk: true, user: "x"), key: 8, token: try XCTUnwrap(token)))
+        XCTAssertTrue(touchID.invalidated, "after its one operation")
+
+        touchID = fresh()
+        _ = try await getToken(permissions: 0x02)
+        let next = fresh()
+        (_, token) = try await getToken(permissions: 0x02)
+        XCTAssertTrue(touchID.invalidated, "replaced by a new token")
+        XCTAssertFalse(next.invalidated)
+
+        clock += 31
+        let ga = CBOR.map([.int(1): .text("github.com"), .int(2): .bytes(clientDataHash)])
+        let (status, _) = await call(0x02, withToken(ga, key: 6, token: try XCTUnwrap(token)))
+        XCTAssertEqual(status, CTAPStatus.pinAuthInvalid.rawValue)
+        XCTAssertTrue(next.invalidated, "expired unused")
+
+        touchID = fresh()
+        _ = try await getToken(permissions: 0x04, rpId: nil)
+        XCTAssertTrue(touchID.invalidated, "a cm token keeps none")
+
+        touchID = fresh()
+        _ = try await getToken(permissions: 0x02)
+        session.end()
+        XCTAssertTrue(touchID.invalidated, "the connection ended")
+    }
+
     func testAuthenticatorSelectionCommand() async {
         var (status, body) = await call(0x0B, nil)
         XCTAssertEqual(status, 0)
@@ -803,6 +853,19 @@ final class AuthenticatorTests: XCTestCase {
         XCTAssertEqual(ui.deletions.count, 2)
         (status, _) = await credMgmt(0x06, .map([.int(2): descriptor]), token: token)
         XCTAssertEqual(status, CTAPStatus.noCredentials.rawValue)
+    }
+
+    func testCredentialManagementMACOverRawParams() async throws {
+        await registerAt("github.com", user: "work")
+        let (_, token) = try await getToken(permissions: 0x04, rpId: nil)
+        // {1: rpIDHash} with the key in a valid but non-minimal encoding
+        // (0x18 0x01): decoding and re-encoding would change the MACed bytes.
+        let params = Data([0xA1, 0x18, 0x01, 0x58, 0x20]) + Data(SHA256.hash(data: Data("github.com".utf8)))
+        XCTAssertEqual(try CBOR.rawValue(forKey: .int(2), inMap: Data([0xA1, 0x02]) + params), params)
+        let mac = PinUvAuthProtocol.two.authenticate(key: try XCTUnwrap(token), Data([0x04]) + params)
+        let request = Data([0x0A, 0xA4, 0x01, 0x04, 0x02]) + params + Data([0x03, 0x02, 0x04, 0x58, 0x20]) + mac
+        let response = await authenticator.handle(request, session: session)
+        XCTAssertEqual(response.first, 0, "enumerateCredentialsBegin verified over the bytes as sent")
     }
 
     func testCredentialManagementAuthorization() async throws {
