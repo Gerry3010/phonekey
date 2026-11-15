@@ -211,7 +211,7 @@ A webcam stream. A phone that offers it lists the feature `camera` in `hello`.
 
 - `camera`: `front` (default) or `back`.
 - `quality`: `720p` (1280×720, default) or `1080p` (1920×1080).
-- `fps`: 15 to 30, default 30.
+- `fps`: an integer from 15 to 30, default 30.
 
 The phone answers with what it actually delivers. The host uses these values,
 not the ones it asked for:
@@ -220,8 +220,10 @@ not the ones it asked for:
 {"t":"camera.started","id":5,"stream":2,"codec":"h264","width":1280,"height":720,"fps":30,"camera":"front"}
 ```
 
-`width` and `height` can be smaller than requested when the camera cannot
-deliver more in the current orientation (see Picture).
+The requested quality is a maximum. If the camera cannot deliver it at the
+requested frame rate in the current orientation (see Picture), the phone keeps
+the frame rate and steps the size down: 1920×1080, 1280×720, 960×540. It never
+scales up and never adds black bars.
 
 **Video.** The chunks of `stream` carry a sequence of frames. Frames do not line
 up with chunks: a frame can span several chunks, and a chunk can end inside a
@@ -237,12 +239,21 @@ frame. Each frame is:
 - H.264 Main or High profile without B-frames, so frames arrive in display order.
 - A keyframe is an IDR frame with SPS and PPS in front of it. The first frame
   is one, and then at least one every 2 s.
-- About 4 Mbit/s at 720p and 8 Mbit/s at 1080p.
+- About 4 Mbit/s at 720p and 8 Mbit/s at 1080p, about 2.5 and 5 Mbit/s at
+  15 fps.
 
 **Picture.** Always upright and landscape (16:9), however the phone stands:
 portrait with the cable at the bottom or at the top, or landscape. The phone
-rotates and crops. The front camera is not mirrored; video apps mirror their
-own preview.
+rotates and crops. In portrait the picture is cut from the short side of the
+sensor, so it shows a narrower field of view than in landscape. Turning the
+phone during a stream can change the field of view, never width and height;
+lying flat keeps the last orientation. The front camera is not mirrored; video
+apps mirror their own preview.
+
+**Order on the wire.** Video shares the session with everything else. The
+phone sends JSON messages ahead of queued video chunks (between chunks, never
+inside one), so FIDO requests and pings are not held up by video. The host
+reads the session without waiting on its decoder.
 
 **Falling behind.** The phone never holds more than 0.5 s of video. When sending
 falls behind, it drops whole frames up to the next keyframe and has the encoder
@@ -253,11 +264,15 @@ decoder:
 {"t":"camera.keyframe","id":6,"stream":2}
 ```
 
-**Heat.** At `thermal` `serious` the phone lowers the frame rate to 15 and says
-so. Width and height never change while a stream runs.
+**Heat.** The phone acts on the worse of `thermal` and the camera's own system
+pressure. At `serious` it lowers the frame rate to 15 and says so. Once both
+have been `fair` or better for 60 s, it returns to the requested rate. If it is
+already `serious` at `camera.start`, it starts at 15. Width and height never
+change while a stream runs.
 
 ```json
 {"t":"camera.changed","stream":2,"fps":15}
+{"t":"camera.changed","stream":2,"fps":30}
 ```
 
 **Stopping.**
@@ -275,7 +290,7 @@ The phone also stops on its own and then sends `camera.stopped` without `id`:
 | `stopped_on_phone` | the user tapped Stop on the phone |
 | `switched_off` | the user turned the webcam off in the app |
 | `interrupted` | iOS took the camera away, for example for a phone call |
-| `thermal` | `thermal` reached `critical` |
+| `thermal` | `thermal` reached `critical`, or iOS stopped the camera for system pressure |
 | `failed` | capturing or encoding failed |
 
 When the session ends, the stream ends with it.
@@ -287,7 +302,8 @@ When the session ends, the stream ends with it.
   photos (`camera.stream_enabled` in `status`). While it is off, `camera.start`
   gets `camera_stream_disabled`.
 - While a stream runs, the phone shows which computer receives it, with a Stop
-  button, and iOS shows its green camera dot.
+  button, and iOS shows its green camera dot. The screen may stay dimmed in desk
+  mode. FIDO prompts appear above the notice as usual.
 
 **Host side.** `phonekey camera run` keeps a v4l2loopback device named
 "PhoneKey" open as its producer. While no application reads it, the host shows a
