@@ -28,6 +28,28 @@ final class AppModel: ObservableObject {
         didSet { UserDefaults.standard.set(photosAllowed, forKey: "photosAllowed") }
     }
 
+    /// The webcam's own switch, off by default (§5 "camera"). Turning it off
+    /// ends a running stream.
+    @Published var webcamAllowed: Bool {
+        didSet {
+            UserDefaults.standard.set(webcamAllowed, forKey: "webcamAllowed")
+            if !webcamAllowed { stopWebcam(.switchedOff) }
+            if webcamAllowed, AVCaptureDevice.authorizationStatus(for: .video) == .notDetermined {
+                AVCaptureDevice.requestAccess(for: .video) { _ in }
+            }
+        }
+    }
+
+    /// The running webcam stream, for the notice on screen.
+    struct WebcamStream: Equatable {
+        let hostName: String?
+        let camera: CameraStreamRequest.Camera
+        let size: VideoSize
+        var fps: Int
+    }
+
+    @Published private(set) var webcam: WebcamStream?
+
     @Published var deskMode: Bool {
         didSet {
             UserDefaults.standard.set(deskMode, forKey: "deskMode")
@@ -46,9 +68,22 @@ final class AppModel: ObservableObject {
 
     private var savedBrightness: CGFloat?
     private var nextStream: UInt32 = 1
+    /// The one webcam stream, across all connections (§5: one at a time).
+    private var webcamJob: WebcamJob?
+    /// Set while a camera.start is setting up, so a second one gets busy.
+    private var webcamStarting = false
+    private var orientationObserver: NSObjectProtocol?
+
+    private struct WebcamJob {
+        let session: PhoneSession
+        let stream: UInt32
+        let streamer: CameraStreamer
+        let sender: Task<Void, Never>
+    }
 
     init() {
         photosAllowed = UserDefaults.standard.bool(forKey: "photosAllowed")
+        webcamAllowed = UserDefaults.standard.bool(forKey: "webcamAllowed")
         deskMode = UserDefaults.standard.bool(forKey: "deskMode")
         UIDevice.current.isBatteryMonitoringEnabled = true
         // The property initializer ran before monitoring was on and saw "unknown".
@@ -65,7 +100,7 @@ final class AppModel: ObservableObject {
             let identity = try Identity.load()
             let hello = HelloMessage.phone(appVersion: AppInfo.current.version,
                                            device: DeviceInfo.helloDevice,
-                                           features: ["status", "photo", "fido"])
+                                           features: ["status", "photo", "fido", "camera"])
             startupError = nil
             server = PhoneServer(identity: identity, registry: hosts, hello: hello, handler: { [weak self] request, session in
                 guard let self else { throw ErrorMessage(id: request.id, code: .internal) }
@@ -145,6 +180,12 @@ final class AppModel: ObservableObject {
             try await startCTAP(request, session)
         case "ctap.cancel":
             await cancelCTAP(request.id, session: ObjectIdentifier(session))
+        case "camera.start":
+            try await startWebcam(request, session)
+        case "camera.stop":
+            try await stopWebcam(request, session)
+        case "camera.keyframe":
+            try await webcamKeyframe(request, session)
         default:
             throw ErrorMessage(id: request.id, code: .unknownType, message: "Unknown request \(request.t).")
         }
@@ -226,6 +267,183 @@ final class AppModel: ObservableObject {
         if let job = ctapJob, job.session == session {
             job.task.cancel()
         }
+        // The stream ends with its session; there is nobody left to tell.
+        if let job = webcamJob, ObjectIdentifier(job.session) == session {
+            endWebcam(job)
+        }
+    }
+
+    // MARK: Webcam (Phase 4a, §5 "camera")
+
+    nonisolated private func startWebcam(_ request: Request, _ session: PhoneSession) async throws {
+        let id = request.id
+        let wanted = try CameraStreamRequest(request)
+        let (stream, orientation, hostName) = try await MainActor.run {
+            () -> (UInt32, AVCaptureVideoOrientation, String?) in
+            guard webcamAllowed else {
+                throw ErrorMessage(id: id, code: .cameraStreamDisabled, message: "The webcam is switched off in PhoneKey.")
+            }
+            guard CameraService.isAvailable else {
+                throw ErrorMessage(id: id, code: .cameraUnavailable, message: "No camera or no camera permission.")
+            }
+            guard webcamJob == nil, !webcamStarting, !capturing, !scannerActive else {
+                throw ErrorMessage(id: id, code: .busy, message: "The camera is in use.")
+            }
+            webcamStarting = true
+            defer { nextStream &+= 1 }
+            return (nextStream, currentVideoOrientation(), session.hostKey.flatMap { hosts.name(for: $0) })
+        }
+
+        let streamer = CameraStreamer(request: wanted, orientation: orientation)
+        streamer.onStop = { [weak self] reason in
+            Task { @MainActor in self?.webcamStoppedOnItsOwn(stream: stream, reason: reason) }
+        }
+        streamer.onFpsChange = { [weak self] fps in
+            Task { @MainActor in
+                guard let self, let job = self.webcamJob, job.stream == stream else { return }
+                self.webcam?.fps = fps
+                Task { try? await job.session.send(CameraChangedMessage(stream: stream, fps: fps)) }
+            }
+        }
+        do {
+            try await Task.detached(priority: .userInitiated) { try streamer.start() }.value
+        } catch {
+            await MainActor.run { webcamStarting = false }
+            log.error("Webcam did not start: \(String(describing: error), privacy: .public)")
+            if case CameraStreamer.StartError.noFormat = error {
+                throw ErrorMessage(id: id, code: .unsupported, message: "The camera cannot deliver this.")
+            }
+            throw ErrorMessage(id: id, code: .cameraUnavailable, message: "The camera did not start.")
+        }
+
+        let fps = streamer.fps
+        do {
+            // The answer goes out before the first chunk (the host sets the stream up on it).
+            try await session.send(CameraStartedMessage(id: id, stream: stream, width: streamer.size.width,
+                                                        height: streamer.size.height, fps: fps,
+                                                        camera: wanted.camera.rawValue))
+        } catch {
+            streamer.stop()
+            await MainActor.run { webcamStarting = false }
+            throw error
+        }
+
+        await MainActor.run {
+            webcamStarting = false
+            let sender = Task.detached(priority: .userInitiated) {
+                await Self.send(streamer.frames, stream: stream, over: session)
+            }
+            let job = WebcamJob(session: session, stream: stream, streamer: streamer, sender: sender)
+            webcamJob = job
+            webcam = WebcamStream(hostName: hostName, camera: wanted.camera, size: streamer.size, fps: fps)
+            watchOrientation()
+            // It may have ended while the answer went out.
+            if let reason = streamer.endedReason {
+                webcamStoppedOnItsOwn(stream: stream, reason: reason)
+            }
+        }
+    }
+
+    /// Drains the queue onto the session, chunk by chunk. Each chunk waits for
+    /// the connection, so JSON messages (FIDO, ping) go out between chunks (§5,
+    /// "Order on the wire").
+    nonisolated private static func send(_ frames: FrameQueue, stream: UInt32, over session: PhoneSession) async {
+        while let frame = await frames.next() {
+            let bytes = frame.encoded
+            var offset = 0
+            while offset < bytes.count {
+                let end = min(offset + Wire.maxChunkData, bytes.count)
+                guard (try? await session.sendChunk(stream: stream, data: bytes[offset..<end])) != nil else {
+                    frames.close()
+                    return
+                }
+                offset = end
+            }
+        }
+    }
+
+    nonisolated private func stopWebcam(_ request: Request, _ session: PhoneSession) async throws {
+        let id = request.id
+        let stream = try await MainActor.run { () -> UInt32 in
+            guard let job = webcamJob, job.session === session, job.stream == request.stream else {
+                throw ErrorMessage(id: id, code: .badRequest, message: "No such webcam stream.")
+            }
+            endWebcam(job)
+            return job.stream
+        }
+        try await session.send(CameraStoppedMessage(id: id, stream: stream, reason: .requested))
+    }
+
+    nonisolated private func webcamKeyframe(_ request: Request, _ session: PhoneSession) async throws {
+        let id = request.id
+        let stream = try await MainActor.run { () -> UInt32 in
+            guard let job = webcamJob, job.session === session, job.stream == request.stream else {
+                throw ErrorMessage(id: id, code: .badRequest, message: "No such webcam stream.")
+            }
+            job.streamer.requestKeyframe()
+            return job.stream
+        }
+        try await session.send(CameraKeyframeMessage(id: id, stream: stream))
+    }
+
+    /// Stop on the phone (the notice's Stop button) or the switch turned off.
+    func stopWebcam(_ reason: CameraStoppedMessage.Reason) {
+        guard let job = webcamJob else { return }
+        endWebcam(job)
+        Task { try? await job.session.send(CameraStoppedMessage(id: nil, stream: job.stream, reason: reason)) }
+    }
+
+    /// The streamer ended by itself (interruption, heat, failure).
+    private func webcamStoppedOnItsOwn(stream: UInt32, reason: CameraStoppedMessage.Reason) {
+        guard let job = webcamJob, job.stream == stream else { return }
+        log.notice("Webcam stopped: \(reason.rawValue, privacy: .public)")
+        endWebcam(job)
+        Task { try? await job.session.send(CameraStoppedMessage(id: nil, stream: job.stream, reason: reason)) }
+    }
+
+    private func endWebcam(_ job: WebcamJob) {
+        webcamJob = nil
+        webcam = nil
+        job.streamer.onStop = nil
+        job.streamer.onFpsChange = nil
+        let streamer = job.streamer
+        DispatchQueue.global(qos: .userInitiated).async { streamer.stop() }
+        job.sender.cancel()
+        if let observer = orientationObserver {
+            NotificationCenter.default.removeObserver(observer)
+            orientationObserver = nil
+            UIDevice.current.endGeneratingDeviceOrientationNotifications()
+        }
+    }
+
+    /// The way the phone stands: the device's orientation, else the UI's (the
+    /// UI turns only between the two portraits). Lying flat keeps the last.
+    private func currentVideoOrientation() -> AVCaptureVideoOrientation {
+        switch UIDevice.current.orientation {
+        case .portrait: return .portrait
+        case .portraitUpsideDown: return .portraitUpsideDown
+        case .landscapeLeft: return .landscapeRight // device and video name the sides oppositely
+        case .landscapeRight: return .landscapeLeft
+        default:
+            let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene
+            return scene?.interfaceOrientation == .portraitUpsideDown ? .portraitUpsideDown : .portrait
+        }
+    }
+
+    private func watchOrientation() {
+        guard orientationObserver == nil else { return }
+        UIDevice.current.beginGeneratingDeviceOrientationNotifications()
+        orientationObserver = NotificationCenter.default.addObserver(
+            forName: UIDevice.orientationDidChangeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, let job = self.webcamJob else { return }
+                switch UIDevice.current.orientation {
+                case .faceUp, .faceDown, .unknown: return // lying flat keeps the last
+                default: job.streamer.setOrientation(self.currentVideoOrientation())
+                }
+            }
+        }
     }
 
     private func wink() {
@@ -241,7 +459,8 @@ final class AppModel: ObservableObject {
             thermal: DeviceInfo.thermalState,
             deskMode: deskMode,
             guidedAccess: UIAccessibility.isGuidedAccessEnabled,
-            camera: .init(enabled: photosAllowed, available: CameraService.isAvailable))
+            camera: .init(enabled: photosAllowed, available: CameraService.isAvailable,
+                          streamEnabled: webcamAllowed, streaming: webcamJob != nil))
     }
 
     nonisolated private func photo(_ request: Request, _ session: PhoneSession) async throws {
@@ -265,7 +484,7 @@ final class AppModel: ObservableObject {
             guard CameraService.isAvailable else {
                 throw ErrorMessage(id: id, code: .cameraUnavailable, message: "No camera or no camera permission.")
             }
-            guard !capturing, !scannerActive else {
+            guard !capturing, !scannerActive, webcamJob == nil, !webcamStarting else {
                 throw ErrorMessage(id: id, code: .busy, message: "The camera is in use.")
             }
             capturing = true
