@@ -15,9 +15,15 @@ struct ContentView: View {
             if model.winking {
                 Color.white.opacity(0.9).ignoresSafeArea().transition(.opacity)
             }
+            if let webcam = model.webcam {
+                // Below FIDO prompts, which appear above it as usual (§5).
+                WebcamNotice(webcam: webcam) { model.stopWebcam(.stoppedOnPhone) }
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
             FIDOPromptOverlay(prompts: model.fidoPrompts)
         }
         .animation(.easeInOut(duration: 0.25), value: model.winking)
+        .animation(.easeInOut(duration: 0.25), value: model.webcam)
         .sheet(isPresented: $model.showPairing, onDismiss: { model.proposedInvite = nil }) {
             PairingView(hosts: model.hosts)
                 .environmentObject(model)
@@ -91,6 +97,13 @@ private struct MainView: View {
                 } footer: {
                     Text("Paired computers may take photos with the back or front camera. "
                         + "You hear the shutter and see a notice on screen each time.")
+                }
+
+                Section {
+                    Toggle("Allow webcam", isOn: $model.webcamAllowed)
+                } footer: {
+                    Text("Paired computers may use this iPhone as a webcam. While it streams, a notice "
+                        + "names the computer and has a Stop button.")
                 }
 
                 Section {
@@ -169,5 +182,39 @@ struct ContentView_Previews: PreviewProvider {
     static var previews: some View {
         ContentView()
             .environmentObject(AppModel())
+    }
+}
+
+/// While the webcam streams: which computer, which camera, and Stop (§5).
+struct WebcamNotice: View {
+    let webcam: AppModel.WebcamStream
+    let stop: () -> Void
+
+    var body: some View {
+        VStack {
+            HStack(spacing: 12) {
+                Image(systemName: "video.fill")
+                    .font(.title3)
+                    .foregroundColor(.green)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(webcam.hostName.map { "Webcam on for \($0)" } ?? "Webcam on")
+                        .font(.headline)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
+                    Text("\(webcam.camera == .front ? "Front" : "Back") camera · \(webcam.size.description) · \(webcam.fps) fps")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                Spacer(minLength: 8)
+                Button("Stop", role: .destructive, action: stop)
+                    .buttonStyle(.bordered)
+            }
+            .padding(14)
+            .background(RoundedRectangle(cornerRadius: 16).fill(Color(.secondarySystemBackground)))
+            .shadow(color: .black.opacity(0.25), radius: 8, y: 2)
+            .padding(.horizontal, 12)
+            Spacer()
+        }
+        .padding(.top, 8)
     }
 }

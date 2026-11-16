@@ -51,6 +51,10 @@ diagrams of every flow is in [docs/how-it-works.de.html](docs/how-it-works.de.ht
   without PIN), and on the iPhone 7 with real Linux: `fido2-token -S` and `-C`,
   `ssh-keygen -K`, Chrome's key management, LUKS without PIN, and three wrong
   PINs in a row blocking until the phone reconnects.
+- **Phase 4a (in progress):** the phone as a webcam. `phonekey camera run`
+  shows it on Linux as a v4l2loopback device; the phone sends H.264 (front or
+  back camera, 720p or 1080p) while an application reads it. Verified against
+  the Simulator's test pattern in an Ubuntu VM; not yet on the iPhone 7.
 
 The roadmap is in [docs/architecture.md](docs/architecture.md#roadmap).
 

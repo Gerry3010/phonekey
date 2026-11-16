@@ -101,5 +101,13 @@ Start muss das iPhone online sein, damit iOS das Entwicklerzertifikat prüft (Ei
 - Der Simulator hat keinen Secure Enclave; dort entsteht der Schlüssel als normaler
   Keychain-Schlüssel mit derselben Touch-ID-Regel. Nur das echte iPhone prüft den Secure Enclave.
 
+**Webcam testen (Phase 4a):** Im Simulator liefert der Webcam-Stream ein bewegtes Testmuster statt der
+Kamera. Dazu in der Lima-VM `v4l2loopback-dkms` und `ffmpeg` installieren, `sudo modprobe v4l2loopback
+video_nr=10 card_label=PhoneKey exclusive_caps=1`, dann `phonekey camera run -connect
+tcp:host.lima.internal:20555` (für Linux gebaut: `GOOS=linux GOARCH=arm64 go build`). Lesen mit `ffmpeg -f
+v4l2 -i /dev/video10 …` startet den Stream. Den Schalter „Allow webcam“ vorher einschalten (Simulator:
+`xcrun simctl spawn booted defaults write net.geraldhofbauer.phonekey webcamAllowed -bool YES`). Welche Kameraformate das iPhone 7
+wirklich liefert, zeigt nur das Gerät.
+
 **Vektoren:** Nach jeder Protokolländerung `go run ./cmd/gen-vectors ../docs/protocol-vectors.json`
 in `linux/`. Go und Swift prüfen beide gegen diese Datei.

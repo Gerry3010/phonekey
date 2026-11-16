@@ -45,14 +45,42 @@ public struct Request: Decodable, Equatable {
     public var id: UInt64?
     public var camera: String?
     public var maxDimension: Int?
+    /// photo.capture: JPEG quality 0.1…1.0.
     public var quality: Double?
+    /// camera.start: "720p" or "1080p", under the same key as the photo's
+    /// quality (docs/protocol.md §5 "camera").
+    public var videoQuality: String?
+    /// camera.start: frames per second.
+    public var fps: Int?
+    /// camera.keyframe and camera.stop: the stream.
+    public var stream: UInt32?
     /// ctap.request: CTAPHID command and payload (base64 in JSON).
     public var cmd: Int?
     public var data: Data?
 
     enum CodingKeys: String, CodingKey {
-        case t, id, camera, quality, cmd, data
+        case t, id, camera, quality, fps, stream, cmd, data
         case maxDimension = "max_dimension"
+    }
+}
+
+extension Request {
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        t = try c.decode(String.self, forKey: .t)
+        id = try c.decodeIfPresent(UInt64.self, forKey: .id)
+        camera = try c.decodeIfPresent(String.self, forKey: .camera)
+        maxDimension = try c.decodeIfPresent(Int.self, forKey: .maxDimension)
+        // A number for photos, a name for the webcam.
+        if let number = try? c.decodeIfPresent(Double.self, forKey: .quality) {
+            quality = number
+        } else {
+            videoQuality = try c.decodeIfPresent(String.self, forKey: .quality)
+        }
+        fps = try c.decodeIfPresent(Int.self, forKey: .fps)
+        stream = try c.decodeIfPresent(UInt32.self, forKey: .stream)
+        cmd = try c.decodeIfPresent(Int.self, forKey: .cmd)
+        data = try c.decodeIfPresent(Data.self, forKey: .data)
     }
 }
 
@@ -94,10 +122,22 @@ public struct StatusMessage: Encodable, Equatable {
     public struct Camera: Encodable, Equatable {
         public var enabled: Bool
         public var available: Bool
+        /// The webcam's own switch (Phase 4).
+        public var streamEnabled: Bool
+        /// A webcam stream is running.
+        public var streaming: Bool
 
-        public init(enabled: Bool, available: Bool) {
+        enum CodingKeys: String, CodingKey {
+            case enabled, available
+            case streamEnabled = "stream_enabled"
+            case streaming
+        }
+
+        public init(enabled: Bool, available: Bool, streamEnabled: Bool = false, streaming: Bool = false) {
             self.enabled = enabled
             self.available = available
+            self.streamEnabled = streamEnabled
+            self.streaming = streaming
         }
     }
 
@@ -163,6 +203,8 @@ public enum ErrorCode: String, Encodable {
     case unknownType = "unknown_type"
     case cameraDisabled = "camera_disabled"
     case cameraUnavailable = "camera_unavailable"
+    case cameraStreamDisabled = "camera_stream_disabled"
+    case unsupported
     case busy
     case captureFailed = "capture_failed"
     case `internal`
@@ -178,5 +220,74 @@ public struct ErrorMessage: Encodable, Error {
         self.id = id
         self.code = code
         self.message = message
+    }
+}
+
+// MARK: Webcam (Phase 4, docs/protocol.md §5 "camera")
+
+public struct CameraStartedMessage: Encodable, Equatable {
+    public var t = "camera.started"
+    public var id: UInt64?
+    public var stream: UInt32
+    public var codec = "h264"
+    public var width: Int
+    public var height: Int
+    public var fps: Int
+    public var camera: String
+
+    public init(id: UInt64?, stream: UInt32, width: Int, height: Int, fps: Int, camera: String) {
+        self.id = id
+        self.stream = stream
+        self.width = width
+        self.height = height
+        self.fps = fps
+        self.camera = camera
+    }
+}
+
+/// The frame rate changed (heat); width and height never do.
+public struct CameraChangedMessage: Encodable, Equatable {
+    public var t = "camera.changed"
+    public var stream: UInt32
+    public var fps: Int
+
+    public init(stream: UInt32, fps: Int) {
+        self.stream = stream
+        self.fps = fps
+    }
+}
+
+/// Acknowledges camera.keyframe.
+public struct CameraKeyframeMessage: Encodable, Equatable {
+    public var t = "camera.keyframe"
+    public var id: UInt64?
+    public var stream: UInt32
+
+    public init(id: UInt64?, stream: UInt32) {
+        self.id = id
+        self.stream = stream
+    }
+}
+
+public struct CameraStoppedMessage: Encodable, Equatable {
+    public enum Reason: String, Encodable {
+        case requested
+        case stoppedOnPhone = "stopped_on_phone"
+        case switchedOff = "switched_off"
+        case interrupted
+        case thermal
+        case failed
+    }
+
+    public var t = "camera.stopped"
+    /// Set when it answers camera.stop; nil when the phone stopped on its own.
+    public var id: UInt64?
+    public var stream: UInt32
+    public var reason: Reason
+
+    public init(id: UInt64?, stream: UInt32, reason: Reason) {
+        self.id = id
+        self.stream = stream
+        self.reason = reason
     }
 }
