@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+
+	"github.com/Gerry3010/phonekey/linux/internal/proto"
 )
 
 func cameraCmd(ctx context.Context, args []string) error {
@@ -28,4 +30,19 @@ func webcamSize(quality string) (width, height int, err error) {
 		return 1920, 1080, nil
 	}
 	return 0, 0, fmt.Errorf("quality %q: use 720p or 1080p", quality)
+}
+
+// cameraChange describes a camera.changed for the log. It carries only what
+// changed: the frame rate, the camera (switched on the phone) or both
+// (docs/protocol.md §5 "camera"). Empty when it names nothing known.
+func cameraChange(c proto.CameraChanged) string {
+	switch {
+	case c.Camera != "" && c.FPS != 0:
+		return fmt.Sprintf("the phone switched to the %s camera and now sends %d fps", c.Camera, c.FPS)
+	case c.Camera != "":
+		return fmt.Sprintf("the phone switched to the %s camera", c.Camera)
+	case c.FPS != 0:
+		return fmt.Sprintf("the phone now sends %d fps", c.FPS)
+	}
+	return ""
 }

@@ -158,11 +158,13 @@ type CameraStarted struct {
 	Camera string `json:"camera"`
 }
 
-// CameraChanged reports a new frame rate while a stream runs.
+// CameraChanged reports what changed while a stream runs: a new frame rate, a
+// camera switched on the phone, or both. Fields that did not change are absent.
 type CameraChanged struct {
 	T      string `json:"t"`
 	Stream uint32 `json:"stream"`
-	FPS    int    `json:"fps"`
+	FPS    int    `json:"fps,omitempty"`
+	Camera string `json:"camera,omitempty"`
 }
 
 // CameraStopped ends a stream; ID is set when it answers camera.stop.
