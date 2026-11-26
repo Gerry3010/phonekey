@@ -333,6 +333,14 @@ opens the webcam (v4l2loopback's client usage event), the host sends
 `camera.start`, decodes the frames with ffmpeg and writes them to the device.
 When the last application closes it, the host sends `camera.stop`.
 
+When the phone refuses or stops on its own, the host shows the placeholder and
+sends no new `camera.start` until the applications have closed the webcam, so a
+refusal does not turn into a loop. The webcam switch is the exception: after
+`camera_stream_disabled` or `switched_off`, the host asks for `status` every
+2 s while applications still read, and starts again once
+`camera.stream_enabled` is true. When the session ends (the app went to the
+background), the host reconnects and starts again while applications read.
+
 ### error
 
 ```json

@@ -36,6 +36,9 @@ type Phone struct {
 	pendingKey []byte
 	requests   []string
 	starts     []proto.CameraStart
+	// switchedOff has one channel per session; SetStreamEnabled(false)
+	// signals each so that a running stream stops.
+	switchedOff []chan struct{}
 }
 
 // Camera is the webcam of the test phone: it loops Frames at FPS.
@@ -43,7 +46,9 @@ type Camera struct {
 	Width, Height, FPS int
 	// Frames start with a keyframe; camera.keyframe restarts from the first.
 	Frames []camera.Frame
-	// Disabled answers camera.start with camera_stream_disabled.
+	// Disabled answers camera.start with camera_stream_disabled; status
+	// reports it as camera.stream_enabled. Change it with SetStreamEnabled
+	// while the phone runs.
 	Disabled bool
 }
 
@@ -88,6 +93,29 @@ func (p *Phone) Pair(hostKey []byte) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.paired[store.EncodeKey(hostKey)] = true
+}
+
+// SetStreamEnabled flips the webcam switch. Turning it off stops a running
+// stream with camera.stopped "switched_off", as the app does.
+func (p *Phone) SetStreamEnabled(on bool) {
+	p.mu.Lock()
+	p.Camera.Disabled = !on
+	conns := append([]chan struct{}(nil), p.switchedOff...)
+	p.mu.Unlock()
+	if !on {
+		for _, c := range conns {
+			select {
+			case c <- struct{}{}:
+			default:
+			}
+		}
+	}
+}
+
+func (p *Phone) streamEnabled() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.Camera != nil && !p.Camera.Disabled
 }
 
 // Requests lists the camera requests received so far ("camera.start", …).
@@ -169,10 +197,42 @@ func (p *Phone) serve(c net.Conn) {
 	// ctap.request waits for the "user" until ctap.cancel arrives, unless it
 	// is a getInfo (0x04), which answers at once.
 	pending := map[uint64]bool{}
+	off := make(chan struct{}, 1)
+	p.mu.Lock()
+	p.switchedOff = append(p.switchedOff, off)
+	p.mu.Unlock()
+	done := make(chan struct{})
+	defer close(done)
+	msgs := make(chan proto.Message)
+	go func() {
+		defer close(msgs)
+		for {
+			m, err := conn.Read()
+			if err != nil {
+				return
+			}
+			select {
+			case msgs <- m:
+			case <-done:
+				return
+			}
+		}
+	}()
 	for {
-		m, err := conn.Read()
-		if err != nil {
-			return
+		var m proto.Message
+		select {
+		case <-off:
+			if stream != nil {
+				stream.stop()
+				stream = nil
+				conn.WriteJSON(proto.CameraStopped{T: "camera.stopped", Stream: videoStreamID, Reason: "switched_off"})
+			}
+			continue
+		case msg, ok := <-msgs:
+			if !ok {
+				return
+			}
+			m = msg
 		}
 		switch m.Type {
 		case "hello":
@@ -180,8 +240,11 @@ func (p *Phone) serve(c net.Conn) {
 			conn.WriteJSON(map[string]any{"t": "pong", "id": *m.ID})
 		case "status.get":
 			lvl := 0.5
-			conn.WriteJSON(proto.StatusReport{T: "status", ID: *m.ID, Thermal: "nominal",
-				Battery: proto.Battery{Level: &lvl, State: "charging"}})
+			st := proto.StatusReport{T: "status", ID: *m.ID, Thermal: "nominal",
+				Battery: proto.Battery{Level: &lvl, State: "charging"}}
+			st.Camera.Enabled, st.Camera.Available = true, true
+			st.Camera.StreamEnabled, st.Camera.Streaming = p.streamEnabled(), stream != nil
+			conn.WriteJSON(st)
 		case "ctap.request":
 			var req proto.Request
 			json.Unmarshal(m.JSON, &req)
@@ -214,7 +277,7 @@ func (p *Phone) serve(c net.Conn) {
 			switch {
 			case p.Camera == nil:
 				conn.WriteJSON(proto.RemoteError{T: "error", ID: m.ID, Code: "camera_unavailable"})
-			case p.Camera.Disabled:
+			case !p.streamEnabled():
 				conn.WriteJSON(proto.RemoteError{T: "error", ID: m.ID, Code: "camera_stream_disabled"})
 			case stream != nil:
 				conn.WriteJSON(proto.RemoteError{T: "error", ID: m.ID, Code: "busy"})
@@ -227,10 +290,9 @@ func (p *Phone) serve(c net.Conn) {
 				if req.Camera == "" {
 					req.Camera = "front"
 				}
-				const id = 2
-				conn.WriteJSON(proto.CameraStarted{T: "camera.started", ID: *m.ID, Stream: id, Codec: "h264",
+				conn.WriteJSON(proto.CameraStarted{T: "camera.started", ID: *m.ID, Stream: videoStreamID, Codec: "h264",
 					Width: p.Camera.Width, Height: p.Camera.Height, FPS: p.Camera.FPS, Camera: req.Camera})
-				stream = startVideo(conn, id, p.Camera)
+				stream = startVideo(conn, videoStreamID, p.Camera)
 			}
 		case "camera.keyframe":
 			p.note(m.Type)
@@ -253,6 +315,9 @@ func (p *Phone) serve(c net.Conn) {
 		}
 	}
 }
+
+// videoStreamID is the chunk stream the test phone sends video on.
+const videoStreamID = 2
 
 // videoStream loops the camera's frames on a chunk stream.
 type videoStream struct {

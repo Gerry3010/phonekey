@@ -49,6 +49,10 @@ func cameraRun(ctx context.Context, args []string) error {
 		FPS: *fps, Width: width, Height: height}, logger)
 }
 
+// switchPollEvery is how often the host asks whether the webcam switch is on
+// again while it waits for it.
+var switchPollEvery = 2 * time.Second
+
 type webcamConfig struct {
 	Client         *client.Client
 	Device         string
@@ -110,7 +114,10 @@ func serveWebcam(ctx context.Context, mux *client.Mux, cfg webcamConfig, out *pi
 	var live *liveStream
 	// The phone refused or stopped on its own: no new start until the
 	// readers have dropped to 0, so a refusal does not turn into a loop.
-	held := false
+	// When the webcam switch in the app was the reason (heldBySwitch), the
+	// host asks for the status every few seconds while applications still
+	// read, and starts again once the switch is back on.
+	held, heldBySwitch := false, false
 	stop := func(tell bool) {
 		if live != nil {
 			live.close(tell)
@@ -120,11 +127,13 @@ func serveWebcam(ctx context.Context, mux *client.Mux, cfg webcamConfig, out *pi
 	defer stop(false)
 	ping := time.NewTicker(20 * time.Second)
 	defer ping.Stop()
+	poll := time.NewTicker(switchPollEvery)
+	defer poll.Stop()
 	for {
 		n := readers.current()
 		switch {
 		case n == 0:
-			held = false
+			held, heldBySwitch = false, false
 			if live != nil {
 				logger.Printf("no application reads the webcam; stopping the stream")
 				stop(true)
@@ -138,13 +147,17 @@ func serveWebcam(ctx context.Context, mux *client.Mux, cfg webcamConfig, out *pi
 					return err
 				}
 				logger.Printf("the phone does not stream: %v", err)
-				held = true
+				held, heldBySwitch = true, re.Code == "camera_stream_disabled"
 			}
 		}
 		var events <-chan proto.Message
 		var ended <-chan struct{}
 		if live != nil {
 			events, ended = live.stream.Events, live.ended
+		}
+		var switchPoll <-chan time.Time
+		if held && heldBySwitch && n > 0 {
+			switchPoll = poll.C
 		}
 		select {
 		case <-ctx.Done():
@@ -165,7 +178,7 @@ func serveWebcam(ctx context.Context, mux *client.Mux, cfg webcamConfig, out *pi
 				json.Unmarshal(msg.JSON, &s)
 				logger.Printf("the phone stopped the webcam: %s", s.Reason)
 				stop(false)
-				held = true
+				held, heldBySwitch = true, s.Reason == "switched_off"
 			}
 		case <-ended:
 			logger.Printf("webcam stream ended: %v", live.err)
@@ -177,6 +190,18 @@ func serveWebcam(ctx context.Context, mux *client.Mux, cfg webcamConfig, out *pi
 			cancel()
 			if err != nil {
 				return err
+			}
+		case <-switchPoll:
+			pctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			msg, err := mux.Request(pctx, proto.Request{T: "status.get"})
+			cancel()
+			if err != nil {
+				return err
+			}
+			var st proto.StatusReport
+			if json.Unmarshal(msg.JSON, &st) == nil && st.Camera.StreamEnabled {
+				logger.Printf("the webcam switch is on again")
+				held, heldBySwitch = false, false
 			}
 		}
 	}
