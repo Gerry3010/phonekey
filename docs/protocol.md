@@ -209,7 +209,9 @@ A webcam stream. A phone that offers it lists the feature `camera` in `hello`.
 {"t":"camera.start","id":5,"camera":"front","quality":"720p","fps":30}
 ```
 
-- `camera`: `front` (default) or `back`.
+- `camera`: `front` or `back`. Without it the phone uses the camera picked in
+  the app (front unless the user changed it), so hosts send it only when the
+  user asked for one.
 - `quality`: `720p` (1280×720, default) or `1080p` (1920×1080).
 - `fps`: an integer from 15 to 30, default 30.
 
@@ -275,6 +277,25 @@ change while a stream runs.
 {"t":"camera.changed","stream":2,"fps":30}
 ```
 
+**Switching cameras.** The user can switch between front and back on the phone
+while a stream runs (see Preview). Width, height and frame rate stay; the phone
+offers the switch only when the other camera delivers them. The first frame from
+the other camera is a keyframe, and capture times keep rising. The phone says
+so:
+
+```json
+{"t":"camera.changed","stream":2,"camera":"back"}
+```
+
+A `camera.changed` carries only what changed: `fps`, `camera`, or both. Hosts
+ignore fields they do not know.
+
+**Preview.** The app shows a live preview of what is sent, with the front/back
+switch, while a stream runs, and can show one without a stream to aim the
+camera and pick the default camera. The preview never sends anything. When a
+`camera.start` arrives while the preview runs without a stream, the stream takes
+the camera over and the preview shows the stream.
+
 **Stopping.**
 
 ```json
@@ -297,7 +318,7 @@ When the session ends, the stream ends with it.
 
 **Rules.**
 - One stream at a time. Another `camera.start`, or `photo.capture` while a
-  stream runs, gets `busy`.
+  stream or the preview runs, gets `busy`.
 - The webcam has its own switch in the app, off by default and separate from
   photos (`camera.stream_enabled` in `status`). While it is off, `camera.start`
   gets `camera_stream_disabled`.
@@ -806,3 +827,4 @@ LUKS passphrase: the secret exists only on the phone. Once a PIN exists (3c),
 | 1 + `fido` | `ctap.request`, `ctap.response`, `ctap.cancel` (Phase 2) |
 | 1 + `fido`, Phase 3 | Authenticator behaviour of steps 3a–3c in §10 (`hmac-secret`, `pinUvAuthToken`, credential management, PIN). No message changes. |
 | 1 + `camera` | `camera.start`, `camera.started`, `camera.keyframe`, `camera.changed`, `camera.stop`, `camera.stopped`, new `status` fields and error codes (Phase 4) |
+| 1 + `camera`, preview | `camera.changed` may carry `camera` (switched on the phone); `camera.start` without `camera` uses the camera picked in the app; the app's preview (Phase 4a) |
