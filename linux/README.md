@@ -176,14 +176,20 @@ systemctl --user enable --now phonekey-camera
 ```
 
 - Options: `-camera front|back` (default: the camera picked in the app, front
-  unless changed there), `-quality 720p|1080p` (default
-  720p), `-fps 15` to `30`, `-device` (default `/dev/video10`).
+  unless changed there), `-quality 720p|1080p` (default 720p), `-fps 15` to
+  `30`, `-device` (default `/dev/video10`).
 - The webcam always has the size of `-quality`. If the phone delivers less
   (it may in portrait), the host scales up.
 - With `exclusive_caps=1`, applications see the webcam only while
   `phonekey camera run` is running.
 - One application at a time can stream from the webcam; a second one gets
   "Device or resource busy".
+- When the phone stops on its own, the application keeps reading the
+  placeholder. Turned off with the webcam switch, the picture comes back by
+  itself once the switch is on again. After Stop on the phone it comes back
+  when the application opens the webcam again. If the app goes to the
+  background, the connection ends; the host reconnects and streams again as
+  soon as the app is open.
 - Decoding uses `ffmpeg` and adds about 67 ms, two frames at 30 fps.
 - The tests that need the real device run with
   `PHONEKEY_TEST_V4L2=/dev/video10 go test ./...`.

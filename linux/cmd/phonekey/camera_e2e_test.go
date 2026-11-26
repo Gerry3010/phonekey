@@ -31,24 +31,9 @@ func TestWebcamEndToEnd(t *testing.T) {
 	if path == "" {
 		t.Skip("set PHONEKEY_TEST_V4L2 to a v4l2loopback device")
 	}
-	frames := testphone.Video(t, 640, 360, 30, 2)
-	lockDevice(t)
-	phone := testphone.New(t)
-	phone.Camera = &testphone.Camera{Width: 640, Height: 360, FPS: 30, Frames: frames}
-
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	cl := &client.Client{Store: &store.Store{Dir: t.TempDir()}, Transport: client.TCP{Addr: phone.Addr()},
-		HostName: "test-host", Version: "test"}
-	hostKey, _ := cl.Store.HostKey()
-	psk := make([]byte, 32)
-	rand.Read(psk)
-	phone.SetPending(psk, hostKey.Public)
-	s, err := cl.Pair(ctx, psk)
-	if err != nil {
-		t.Fatal(err)
-	}
-	s.Close()
+	phone, cl := webcamTestPhone(ctx, t)
 
 	const w, h = 1280, 720
 	runCtx, stopRun := context.WithCancel(ctx)
@@ -107,6 +92,92 @@ func TestWebcamEndToEnd(t *testing.T) {
 	if s := phone.Starts(); len(s) == 0 || s[0].Camera != "" {
 		t.Fatalf("camera.start %+v, want no camera", s)
 	}
+}
+
+// After the webcam switch went off and on again, the picture comes back
+// while the application keeps reading.
+func TestWebcamSwitchBackOn(t *testing.T) {
+	path := os.Getenv("PHONEKEY_TEST_V4L2")
+	if path == "" {
+		t.Skip("set PHONEKEY_TEST_V4L2 to a v4l2loopback device")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	phone, cl := webcamTestPhone(ctx, t)
+	defer func(d time.Duration) { switchPollEvery = d }(switchPollEvery)
+	switchPollEvery = 200 * time.Millisecond
+
+	runCtx, stopRun := context.WithCancel(ctx)
+	done := make(chan error, 1)
+	go func() {
+		done <- runWebcam(runCtx, webcamConfig{Client: cl, Device: path, Quality: "720p",
+			FPS: 30, Width: 1280, Height: 720}, log.New(testLog{t}, "", 0))
+	}()
+	defer func() {
+		stopRun()
+		<-done
+	}()
+	time.Sleep(time.Second)
+
+	reader := exec.CommandContext(ctx, "ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin",
+		"-f", "v4l2", "-i", path, "-t", "6", "-f", "null", "-")
+	reader.Stderr = testLog{t}
+	if err := reader.Start(); err != nil {
+		t.Fatal(err)
+	}
+	starts := func() int {
+		n := 0
+		for _, r := range phone.Requests() {
+			if r == "camera.start" {
+				n++
+			}
+		}
+		return n
+	}
+	waitFor := func(what string, ok func() bool) {
+		t.Helper()
+		deadline := time.Now().Add(3 * time.Second)
+		for !ok() {
+			if time.Now().After(deadline) {
+				t.Fatalf("%s: requests %v", what, phone.Requests())
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+	}
+	waitFor("first camera.start", func() bool { return starts() == 1 })
+
+	phone.SetStreamEnabled(false)
+	time.Sleep(time.Second)
+	if n := starts(); n != 1 {
+		t.Fatalf("%d camera.start while the switch is off", n)
+	}
+	phone.SetStreamEnabled(true)
+	waitFor("camera.start after the switch is on again", func() bool { return starts() == 2 })
+	// The same reader read all along; nothing else opened the webcam.
+	if err := reader.Wait(); err != nil {
+		t.Fatalf("reading the webcam: %v", err)
+	}
+}
+
+// webcamTestPhone starts a test phone with a camera and pairs a client with it.
+func webcamTestPhone(ctx context.Context, t *testing.T) (*testphone.Phone, *client.Client) {
+	t.Helper()
+	frames := testphone.Video(t, 640, 360, 30, 2)
+	lockDevice(t)
+	phone := testphone.New(t)
+	phone.Camera = &testphone.Camera{Width: 640, Height: 360, FPS: 30, Frames: frames}
+	cl := &client.Client{Store: &store.Store{Dir: t.TempDir()}, Transport: client.TCP{Addr: phone.Addr()},
+		HostName: "test-host", Version: "test"}
+	hostKey, _ := cl.Store.HostKey()
+	psk := make([]byte, 32)
+	rand.Read(psk)
+	phone.SetPending(psk, hostKey.Public)
+	s, err := cl.Pair(ctx, psk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	return phone, cl
 }
 
 type testLog struct{ t *testing.T }
