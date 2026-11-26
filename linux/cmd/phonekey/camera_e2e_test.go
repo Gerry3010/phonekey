@@ -54,7 +54,7 @@ func TestWebcamEndToEnd(t *testing.T) {
 	runCtx, stopRun := context.WithCancel(ctx)
 	done := make(chan error, 1)
 	go func() {
-		done <- runWebcam(runCtx, webcamConfig{Client: cl, Device: path, Camera: "front", Quality: "720p",
+		done <- runWebcam(runCtx, webcamConfig{Client: cl, Device: path, Quality: "720p",
 			FPS: 30, Width: w, Height: h}, log.New(testLog{t}, "", 0))
 	}()
 	defer func() {
@@ -102,6 +102,10 @@ func TestWebcamEndToEnd(t *testing.T) {
 	}
 	if r := phone.Requests(); r[0] != "camera.start" {
 		t.Fatalf("requests %v", r)
+	}
+	// Without -camera the phone picks the camera (the one chosen in the app).
+	if s := phone.Starts(); len(s) == 0 || s[0].Camera != "" {
+		t.Fatalf("camera.start %+v, want no camera", s)
 	}
 }
 

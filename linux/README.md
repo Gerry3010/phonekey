@@ -175,7 +175,8 @@ cp contrib/phonekey-camera.service ~/.config/systemd/user/
 systemctl --user enable --now phonekey-camera
 ```
 
-- Options: `-camera front|back` (default front), `-quality 720p|1080p` (default
+- Options: `-camera front|back` (default: the camera picked in the app, front
+  unless changed there), `-quality 720p|1080p` (default
   720p), `-fps 15` to `30`, `-device` (default `/dev/video10`).
 - The webcam always has the size of `-quality`. If the phone delivers less
   (it may in portrait), the host scales up.

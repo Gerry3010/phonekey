@@ -26,7 +26,7 @@ func cameraRun(ctx context.Context, args []string) error {
 	var cf connFlags
 	cf.register(fs)
 	device := fs.String("device", "/dev/video10", "v4l2loopback device")
-	cam := fs.String("camera", "front", "front or back")
+	cam := fs.String("camera", "", "front or back (default: the camera picked in the app)")
 	quality := fs.String("quality", "720p", "720p or 1080p")
 	fps := fs.Int("fps", 30, "frame rate, 15 to 30")
 	fs.Parse(args)
@@ -34,7 +34,7 @@ func cameraRun(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	if *cam != "front" && *cam != "back" {
+	if *cam != "" && *cam != "front" && *cam != "back" {
 		return fmt.Errorf("camera %q: use front or back", *cam)
 	}
 	if *fps < 15 || *fps > 30 {
@@ -52,7 +52,7 @@ func cameraRun(ctx context.Context, args []string) error {
 type webcamConfig struct {
 	Client         *client.Client
 	Device         string
-	Camera         string
+	Camera         string // empty: the camera picked in the app
 	Quality        string
 	FPS            int
 	Width, Height  int
@@ -157,7 +157,9 @@ func serveWebcam(ctx context.Context, mux *client.Mux, cfg webcamConfig, out *pi
 			case "camera.changed":
 				var c proto.CameraChanged
 				json.Unmarshal(msg.JSON, &c)
-				logger.Printf("the phone now sends %d fps", c.FPS)
+				if s := cameraChange(c); s != "" {
+					logger.Print(s)
+				}
 			case "camera.stopped":
 				var s proto.CameraStopped
 				json.Unmarshal(msg.JSON, &s)

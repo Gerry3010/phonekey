@@ -35,6 +35,7 @@ type Phone struct {
 	pendingPSK []byte
 	pendingKey []byte
 	requests   []string
+	starts     []proto.CameraStart
 }
 
 // Camera is the webcam of the test phone: it loops Frames at FPS.
@@ -94,6 +95,13 @@ func (p *Phone) Requests() []string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return append([]string(nil), p.requests...)
+}
+
+// Starts lists the camera.start requests received so far, as sent.
+func (p *Phone) Starts() []proto.CameraStart {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]proto.CameraStart(nil), p.starts...)
 }
 
 func (p *Phone) note(t string) {
@@ -213,6 +221,9 @@ func (p *Phone) serve(c net.Conn) {
 			default:
 				var req proto.CameraStart
 				json.Unmarshal(m.JSON, &req)
+				p.mu.Lock()
+				p.starts = append(p.starts, req)
+				p.mu.Unlock()
 				if req.Camera == "" {
 					req.Camera = "front"
 				}
